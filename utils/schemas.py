@@ -29,6 +29,41 @@ class PipelineParameters(BaseModel):
     top_k: int = 5
     chunk_size: int = 512
     chunk_overlap: int = 64
+    summary_model_id: str | None = None
+    quiz_model_id: str | None = None
+
+
+class SummaryModelPreset(BaseModel):
+    id: str
+    label: str
+    model_name: str
+    base_url: str
+    server_conda_env: str
+    server_model: str
+    gpu_memory_utilization: float
+    max_model_len: int
+    tensor_parallel_size: int
+    dtype: str | None = None
+    quantization: str | None = None
+
+
+class QuizModelPreset(BaseModel):
+    id: str
+    label: str
+    model_name: str
+    base_url: str
+    server_conda_env: str
+    server_model: str
+    lora_path: str
+    gpu_memory_utilization: float
+    max_model_len: int
+    tensor_parallel_size: int
+    dtype: str | None = None
+
+
+class ModelSelectionSnapshot(BaseModel):
+    summary: SummaryModelPreset
+    quiz: QuizModelPreset
 
 
 class TranscriptResult(BaseModel):
@@ -96,6 +131,7 @@ class PipelineRunState(BaseModel):
     input_source: str = ""
     input_filename: str | None = None
     parameters: PipelineParameters
+    selected_models: ModelSelectionSnapshot | None = None
     steps: dict[str, StepStatus]
     transcript: str = ""
     keywords: list[str] = Field(default_factory=list)

@@ -11,11 +11,14 @@ from utils.errors import ModelResponseFormatError
 from utils.schemas import (
     ChunkResult,
     KeywordResult,
+    ModelSelectionSnapshot,
     PipelineParameters,
     QuizQuestion,
     QuizResult,
+    QuizModelPreset,
     RetrievalResult,
     RetrievedChunk,
+    SummaryModelPreset,
     TextChunk,
 )
 
@@ -126,8 +129,8 @@ class FakeQuizService:
 
 
 class SequentialPipelineService(PipelineService):
-    def __init__(self, config, server_manager=None) -> None:
-        super().__init__(config, server_manager)
+    def __init__(self, config, server_manager=None, selected_models=None) -> None:
+        super().__init__(config, server_manager, selected_models)
         self.fake_embedding_service = FakeEmbeddingService()
         self.fake_quiz_service = FakeQuizService()
 
@@ -163,12 +166,50 @@ class FailingSummaryPipelineService(PipelineService):
 
 
 class PipelineServiceTest(unittest.TestCase):
+    def _make_selection(self) -> ModelSelectionSnapshot:
+        return ModelSelectionSnapshot(
+            summary=SummaryModelPreset(
+                id="summary-test",
+                label="Summary Test",
+                model_name="summary-model",
+                base_url="http://127.0.0.1:9101/v1",
+                server_conda_env="summary-env",
+                server_model="summary-server-model",
+                gpu_memory_utilization=0.5,
+                max_model_len=4096,
+                tensor_parallel_size=1,
+                dtype="bfloat16",
+                quantization="fp8",
+            ),
+            quiz=QuizModelPreset(
+                id="quiz-test",
+                label="Quiz Test",
+                model_name="quiz-model",
+                base_url="http://127.0.0.1:9100/v1",
+                server_conda_env="quiz-env",
+                server_model="quiz-server-model",
+                lora_path="/tmp/fake-adapter",
+                gpu_memory_utilization=0.6,
+                max_model_len=8192,
+                tensor_parallel_size=1,
+                dtype="bfloat16",
+            ),
+        )
+
     def test_live_pipeline_and_options_regeneration(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             config = AppConfig(project_root=Path(tempdir))
             config.ensure_directories()
-            service = SequentialPipelineService(config)
-            parameters = PipelineParameters(n_keywords=4, top_k=3, chunk_size=80, chunk_overlap=10)
+            selection = self._make_selection()
+            service = SequentialPipelineService(config, selected_models=selection)
+            parameters = PipelineParameters(
+                n_keywords=4,
+                top_k=3,
+                chunk_size=80,
+                chunk_overlap=10,
+                summary_model_id=selection.summary.id,
+                quiz_model_id=selection.quiz.id,
+            )
 
             states = list(
                 service.stream_pipeline(
@@ -189,6 +230,7 @@ class PipelineServiceTest(unittest.TestCase):
             self.assertEqual(final_state.steps["quiz"].status, "completed")
             self.assertTrue(final_state.quiz_result)
             self.assertEqual(final_state.quiz_generation_count, 1)
+            self.assertEqual(final_state.selected_models, selection)
 
             transcript_path = Path(config.runs_dir) / final_state.run_id / "outputs" / "transcript.txt"
             self.assertTrue(transcript_path.exists())

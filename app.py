@@ -7,8 +7,9 @@ import pandas as pd
 
 from services.pipeline_service import PipelineService
 from utils.config import load_config
+from utils.model_registry import ModelRegistry, build_runtime_config
 from utils.server_manager import ModelServerManager
-from utils.schemas import PipelineParameters, PipelineRunState
+from utils.schemas import ModelSelectionSnapshot, PipelineParameters, PipelineRunState
 from utils.ui_helpers import (
     append_custom_question,
     format_question_markdown,
@@ -18,7 +19,7 @@ from utils.ui_helpers import (
 
 
 APP_CONFIG = load_config()
-APP_SERVER_MANAGER = ModelServerManager(APP_CONFIG)
+APP_MODEL_REGISTRY = ModelRegistry.load(APP_CONFIG.model_info_path)
 DEFAULT_QUIZ_MARKDOWN = "尚未產生題目。"
 INPUT_MODE_VIDEO = "video"
 INPUT_MODE_TRANSCRIPT = "manual_transcript"
@@ -83,19 +84,33 @@ def format_quiz_markdown(state: PipelineRunState) -> str:
     return "\n".join(lines)
 
 
+def resolve_state_model_selection(state: PipelineRunState) -> ModelSelectionSnapshot:
+    if state.selected_models is not None:
+        return state.selected_models
+    return APP_MODEL_REGISTRY.resolve_selection(
+        state.parameters.summary_model_id,
+        state.parameters.quiz_model_id,
+    )
+
+
 def format_run_info(state: PipelineRunState) -> dict[str, Any]:
+    model_selection = resolve_state_model_selection(state)
     return {
         "run_id": state.run_id,
         "mode": state.mode,
         "input_source": state.input_source,
         "input_filename": state.input_filename,
+        "parameters": state.parameters.model_dump(mode="json"),
         "quiz_generation_count": state.quiz_generation_count,
-        "summary_model_name": APP_CONFIG.summary_model_name,
-        "summary_base_url": APP_CONFIG.summary_base_url,
+        "summary_model_id": model_selection.summary.id,
+        "summary_model_name": model_selection.summary.model_name,
+        "summary_base_url": model_selection.summary.base_url,
         "embedding_model_name": APP_CONFIG.embedding_model_name,
         "embedding_conda_env": APP_CONFIG.embedding_conda_env,
-        "quiz_model_name": APP_CONFIG.quiz_model_name,
-        "quiz_base_url": APP_CONFIG.quiz_base_url,
+        "quiz_model_id": model_selection.quiz.id,
+        "quiz_model_name": model_selection.quiz.model_name,
+        "quiz_base_url": model_selection.quiz.base_url,
+        "selected_models": model_selection.model_dump(mode="json"),
         "auto_start_model_servers": APP_CONFIG.auto_start_model_servers,
         "model_server_start_strategy": APP_CONFIG.model_server_start_strategy,
         "keep_model_servers_warm": APP_CONFIG.keep_model_servers_warm,
@@ -297,7 +312,17 @@ def render_regeneration_outputs(
 
 
 def build_service() -> PipelineService:
-    return PipelineService(APP_CONFIG, APP_SERVER_MANAGER)
+    default_selection = APP_MODEL_REGISTRY.resolve_selection()
+    return build_service_for_selection(default_selection)
+
+
+def build_service_for_selection(selection: ModelSelectionSnapshot) -> PipelineService:
+    runtime_config = build_runtime_config(APP_CONFIG, selection)
+    return PipelineService(
+        runtime_config,
+        ModelServerManager(runtime_config),
+        selected_models=selection,
+    )
 
 
 def run_pipeline_ui(
@@ -309,6 +334,8 @@ def run_pipeline_ui(
     top_k: int,
     chunk_size: int,
     chunk_overlap: int,
+    summary_model_id: str,
+    quiz_model_id: str,
 ):
     selected_video_path, selected_transcript_text, selected_subtitle_path = normalize_selected_inputs(
         input_mode,
@@ -321,8 +348,11 @@ def run_pipeline_ui(
         top_k=top_k,
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
+        summary_model_id=summary_model_id,
+        quiz_model_id=quiz_model_id,
     )
-    service = build_service()
+    selection = APP_MODEL_REGISTRY.resolve_selection(summary_model_id, quiz_model_id)
+    service = build_service_for_selection(selection)
 
     is_first_yield = True
     for state in service.stream_pipeline(
@@ -345,7 +375,8 @@ def regenerate_ui(
     if not state_payload:
         raise gr.Error("請先執行 Run Pipeline。")
 
-    service = build_service()
+    state = PipelineRunState.model_validate(state_payload)
+    service = build_service_for_selection(resolve_state_model_selection(state))
 
     custom_questions = parse_custom_question_lines(custom_question_text) if options_only else None
 
@@ -366,7 +397,8 @@ def run_rag_ui(
     if not state_payload:
         raise gr.Error("請先執行 Run Pipeline。")
 
-    service = build_service()
+    state = PipelineRunState.model_validate(state_payload)
+    service = build_service_for_selection(resolve_state_model_selection(state))
     custom_keywords = parse_custom_keywords(custom_keywords_text)
 
     is_first_yield = True
@@ -402,6 +434,7 @@ def regenerate_options_only_ui(
 
 def build_demo() -> gr.Blocks:
     config = APP_CONFIG
+    default_selection = APP_MODEL_REGISTRY.resolve_selection()
 
     with gr.Blocks(title="Video Quiz Generation Demo") as demo:
         gr.Markdown(
@@ -416,6 +449,7 @@ def build_demo() -> gr.Blocks:
             `AUTO_START_MODEL_SERVERS={int(config.auto_start_model_servers)}`，
             啟動策略為 `{config.model_server_start_strategy}`，
             embedding 會在 conda env `{config.embedding_conda_env}` 執行。
+            模型選單來源為 `{config.model_info_path}`。
             """
         )
 
@@ -450,6 +484,16 @@ def build_demo() -> gr.Blocks:
                 top_k_input = gr.Slider(1, 10, value=5, step=1, label="Retrieval Top-K")
                 chunk_size_input = gr.Slider(128, 2048, value=512, step=64, label="Chunk Size")
                 chunk_overlap_input = gr.Slider(0, 512, value=64, step=16, label="Chunk Overlap")
+                summary_model_input = gr.Dropdown(
+                    choices=APP_MODEL_REGISTRY.summary_choices(),
+                    value=default_selection.summary.id,
+                    label="Summary Model",
+                )
+                quiz_model_input = gr.Dropdown(
+                    choices=APP_MODEL_REGISTRY.quiz_choices(),
+                    value=default_selection.quiz.id,
+                    label="Quiz Model",
+                )
 
         video_tab.select(fn=lambda: INPUT_MODE_VIDEO, outputs=[input_mode_state])
         transcript_tab.select(fn=lambda: INPUT_MODE_TRANSCRIPT, outputs=[input_mode_state])
@@ -537,6 +581,8 @@ def build_demo() -> gr.Blocks:
                 top_k_input,
                 chunk_size_input,
                 chunk_overlap_input,
+                summary_model_input,
+                quiz_model_input,
             ],
             outputs=output_components,
             show_progress="hidden",
@@ -569,7 +615,9 @@ def build_demo() -> gr.Blocks:
 if __name__ == "__main__":
     config = APP_CONFIG
     if config.auto_start_model_servers and config.model_server_start_strategy == "preload":
-        APP_SERVER_MANAGER.ensure_servers_ready()
+        default_selection = APP_MODEL_REGISTRY.resolve_selection()
+        preload_config = build_runtime_config(config, default_selection)
+        ModelServerManager(preload_config).ensure_servers_ready()
     build_demo().queue(default_concurrency_limit=1).launch(
         server_name=config.app_host,
         server_port=config.app_port,
