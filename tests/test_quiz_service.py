@@ -144,6 +144,34 @@ class QuizServiceTest(unittest.TestCase):
 
         self.assertEqual(stems, ["Existing stem"])
 
+    def test_generate_full_questions_prefers_explicit_question_count(self) -> None:
+        service = self._build_service()
+        captured_indices: list[int] = []
+
+        def fake_generate_single_full_question(client, prompt: str, question_index: int):
+            del client, prompt
+            captured_indices.append(question_index)
+            return (
+                QuizQuestion(
+                    question=f"Question {question_index}",
+                    options={"A": "A", "B": "B", "C": "C", "D": "D"},
+                    answer="A",
+                ),
+                {"question_index": question_index},
+            )
+
+        service._generate_single_full_question = fake_generate_single_full_question  # type: ignore[method-assign]
+
+        questions, raw_responses = service._generate_full_questions(
+            client=object(),
+            references="Reference paragraph 1:alpha",
+            question_count=2,
+        )
+
+        self.assertEqual(captured_indices, [1, 2])
+        self.assertEqual([question.question for question in questions], ["Question 1", "Question 2"])
+        self.assertEqual([item["question_index"] for item in raw_responses], [1, 2])
+
 
 if __name__ == "__main__":
     unittest.main()

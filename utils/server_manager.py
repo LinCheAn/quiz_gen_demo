@@ -167,6 +167,8 @@ class ModelServerManager:
             "vllm",
             "serve",
             self.config.summary_server_model,
+            "--quantization",
+            "fp8",
             "--host",
             host,
             "--port",
@@ -179,8 +181,8 @@ class ModelServerManager:
             str(self.config.summary_server_gpu_memory_utilization),
             "--max-model-len",
             str(self.config.summary_server_max_model_len),
-            "--dtype",
-            self.config.summary_server_dtype,
+            # "--dtype",
+            # self.config.summary_server_dtype,
         ]
         return ManagedServerSpec(
             name="summary",

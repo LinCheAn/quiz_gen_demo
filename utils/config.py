@@ -45,7 +45,8 @@ class AppConfig:
     asr_model_name: str = os.getenv("ASR_MODEL_NAME", "MediaTek-Research/Breeze-ASR-25")
     asr_chunk_length_s: int = _env_int("ASR_CHUNK_LENGTH_S", 30)
     asr_conda_env: str = os.getenv("ASR_CONDA_ENV", "inference")
-    summary_model_name: str = os.getenv("SUMMARY_MODEL_NAME", "Qwen/Qwen3.5-4B")
+    # summary_model_name: str = os.getenv("SUMMARY_MODEL_NAME", "Qwen/Qwen3.5-4B")
+    summary_model_name: str = os.getenv("SUMMARY_MODEL_NAME", "grpo_v4.2")
     summary_base_url: str = os.getenv("SUMMARY_BASE_URL", "http://127.0.0.1:8001/v1")
     summary_api_key: str = os.getenv("SUMMARY_API_KEY", os.getenv("OPENAI_API_KEY", "0"))
     embedding_model_name: str = os.getenv("EMBEDDING_MODEL_NAME", "BAAI/bge-m3")
@@ -66,7 +67,8 @@ class AppConfig:
     quiz_server_conda_env: str = os.getenv("QUIZ_SERVER_CONDA_ENV", "vllm")
     summary_server_model: str = os.getenv(
         "SUMMARY_SERVER_MODEL",
-        "Qwen/Qwen3.5-4B",
+        # "Qwen/Qwen3.5-4B",
+        "unsloth/Meta-Llama-3.1-8B-Instruct",
     )
     quiz_server_model: str = os.getenv(
         "QUIZ_SERVER_MODEL",
