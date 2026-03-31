@@ -1,10 +1,21 @@
 from __future__ import annotations
 
+import re
+
 from utils.schemas import QuizQuestion
 
 
 def parse_custom_question_lines(text: str) -> list[str]:
     return [line.strip() for line in text.splitlines() if line.strip()]
+
+
+def parse_custom_keywords(text: str) -> list[str]:
+    keywords: list[str] = []
+    for token in re.split(r"[\n,]+", text):
+        normalized = re.sub(r"\s+", " ", token).strip()
+        if normalized:
+            keywords.append(normalized)
+    return keywords
 
 
 def append_custom_question(existing_text: str, question_text: str) -> str:

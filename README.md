@@ -95,7 +95,8 @@ pip install -r requirements.txt
 
 此專案現在只支援 `live` 模式：
 
-- ASR 需要 `transformers`, `torch`, `librosa`
+- ASR 需要 `transformers`, `torch`, `numpy`
+- 可用 `ASR_CONDA_ENV` 指定 ASR worker 執行的 conda env
 - retrieval 會在 `EMBEDDING_CONDA_ENV` 指定的環境內執行 `FlagEmbedding`
 - summary / quiz 預設走 OpenAI-compatible endpoint
 
@@ -239,6 +240,7 @@ QUIZ_SERVER_GPU_MEMORY_UTILIZATION=0.45
 embedding 不再依賴啟動 `app.py` 的當前環境，而是固定透過子程序在指定 conda env 內執行：
 
 ```bash
+ASR_CONDA_ENV=inference
 EMBEDDING_CONDA_ENV=inference
 EMBEDDING_MODEL_NAME=BAAI/bge-m3
 EMBEDDING_USE_FP16=1
@@ -247,6 +249,7 @@ EMBEDDING_USE_FP16=1
 如果你的 `FlagEmbedding` 安裝在 `cool`，就改成：
 
 ```bash
+ASR_CONDA_ENV=cool
 EMBEDDING_CONDA_ENV=cool
 ```
 

@@ -44,6 +44,7 @@ class AppConfig:
     default_mode: str = os.getenv("DEMO_DEFAULT_MODE", "live")
     asr_model_name: str = os.getenv("ASR_MODEL_NAME", "MediaTek-Research/Breeze-ASR-25")
     asr_chunk_length_s: int = _env_int("ASR_CHUNK_LENGTH_S", 30)
+    asr_conda_env: str = os.getenv("ASR_CONDA_ENV", "inference")
     summary_model_name: str = os.getenv("SUMMARY_MODEL_NAME", "Qwen/Qwen3.5-4B")
     summary_base_url: str = os.getenv("SUMMARY_BASE_URL", "http://127.0.0.1:8001/v1")
     summary_api_key: str = os.getenv("SUMMARY_API_KEY", os.getenv("OPENAI_API_KEY", "0"))

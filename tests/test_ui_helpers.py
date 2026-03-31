@@ -3,7 +3,12 @@ from __future__ import annotations
 import unittest
 
 from utils.schemas import QuizQuestion
-from utils.ui_helpers import append_custom_question, format_question_markdown, parse_custom_question_lines
+from utils.ui_helpers import (
+    append_custom_question,
+    format_question_markdown,
+    parse_custom_keywords,
+    parse_custom_question_lines,
+)
 
 
 class UIHelpersTest(unittest.TestCase):
@@ -21,6 +26,12 @@ class UIHelpersTest(unittest.TestCase):
         self.assertEqual(
             append_custom_question("", "Second question"),
             "Second question",
+        )
+
+    def test_parse_custom_keywords_accepts_commas_and_newlines(self) -> None:
+        self.assertEqual(
+            parse_custom_keywords("tree search,\n graph traversal  ,\n\nheap"),
+            ["tree search", "graph traversal", "heap"],
         )
 
     def test_format_question_markdown_separates_answer_from_option_list(self) -> None:

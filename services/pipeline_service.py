@@ -236,6 +236,9 @@ class PipelineService:
         if options_only and not state.quiz_result and not custom_question_stems:
             raise ValueError("No existing quiz found. Generate a quiz first or provide custom questions.")
 
+        existing_questions = state.quiz_result.questions if state.quiz_result else None
+        state.quiz_result = None
+
         self._set_step(
             state,
             "quiz",
@@ -247,7 +250,6 @@ class PipelineService:
         try:
             self._prepare_server_for_step(state.mode, "quiz")
             if options_only:
-                existing_questions = state.quiz_result.questions if state.quiz_result else None
                 quiz_result = services["quiz"].regenerate_options_only(
                     existing_questions=existing_questions,
                     context_chunks=context_chunks,
@@ -286,6 +288,67 @@ class PipelineService:
             self._set_step(state, "quiz", "failed", "Quiz regeneration failed", error=error_message)
             if progress_callback:
                 progress_callback(self.STEP_PROGRESS["quiz"][0], f"Quiz failed: {error_message}")
+            yield self._persist_and_copy(state, storage)
+        finally:
+            self._cleanup_managed_servers(state.mode)
+
+    def stream_rag_retrieval(
+        self,
+        *,
+        run_state_payload: dict,
+        custom_keywords: list[str] | None = None,
+        progress_callback: ProgressCallback | None = None,
+    ) -> Iterator[PipelineRunState]:
+        state = PipelineRunState.model_validate(run_state_payload)
+        self._validate_mode(state.mode)
+        storage = RunArtifactManager(self.config, state.run_id)
+        services = self._build_services(state.mode)
+        retrieval_keywords = [keyword.strip() for keyword in (custom_keywords or []) if keyword.strip()] or state.keywords
+
+        if not state.chunks:
+            raise ValueError("No chunks found. Run the pipeline first.")
+        if not retrieval_keywords:
+            raise ValueError("No keywords found. Run the pipeline first or provide custom keywords.")
+
+        self._reset_quiz_after_rag(state)
+        self._set_step(state, "retrieval", "running", "Retrieving most relevant chunks")
+        yield self._persist_and_copy(state, storage)
+
+        try:
+            retrieval_result = services["embedding"].retrieve(
+                state.chunks,
+                retrieval_keywords,
+                state.parameters.top_k,
+                progress_callback=self._step_progress(progress_callback, "retrieval"),
+            )
+            state.retrieved_chunks = retrieval_result.results
+            retrieval_artifact = storage.save_json(
+                "outputs/retrieval.json",
+                retrieval_result.model_dump(mode="json"),
+            )
+            self._set_step(
+                state,
+                "retrieval",
+                "completed",
+                f"Retrieved top {len(state.retrieved_chunks)} chunks using {len(retrieval_keywords)} keywords",
+                artifact_path=retrieval_artifact,
+            )
+            self._set_step(
+                state,
+                "quiz",
+                "pending",
+                "RAG updated. Manually regenerate quiz to use the latest retrieval results.",
+            )
+            if progress_callback:
+                progress_callback(self.STEP_PROGRESS["retrieval"][1], "RAG retrieval completed")
+            yield self._persist_and_copy(state, storage)
+        except Exception as exc:
+            error_message, error_payload = self._build_error_record(storage, "retrieval", exc)
+            state.errors.append(error_message)
+            storage.save_json("outputs/error.json", error_payload)
+            self._set_step(state, "retrieval", "failed", "RAG retrieval failed", error=error_message)
+            if progress_callback:
+                progress_callback(self.STEP_PROGRESS["retrieval"][0], f"RAG retrieval failed: {error_message}")
             yield self._persist_and_copy(state, storage)
         finally:
             self._cleanup_managed_servers(state.mode)
@@ -364,6 +427,15 @@ class PipelineService:
         state.updated_at = utc_now_iso()
         storage.save_state(state)
         return state.model_copy(deep=True)
+
+    def _reset_quiz_after_rag(self, state: PipelineRunState) -> None:
+        state.quiz_result = None
+        self._set_step(
+            state,
+            "quiz",
+            "pending",
+            "RAG updated. Manually regenerate quiz to use the latest retrieval results.",
+        )
 
     def _build_error_record(
         self,
