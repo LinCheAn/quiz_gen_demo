@@ -3,12 +3,18 @@ from __future__ import annotations
 from typing import Any
 
 import gradio as gr
+import pandas as pd
 
 from services.pipeline_service import PipelineService
 from utils.config import load_config
 from utils.server_manager import ModelServerManager
 from utils.schemas import PipelineParameters, PipelineRunState
-from utils.ui_helpers import append_custom_question, format_question_markdown, parse_custom_question_lines
+from utils.ui_helpers import (
+    append_custom_question,
+    format_question_markdown,
+    parse_custom_keywords,
+    parse_custom_question_lines,
+)
 
 
 APP_CONFIG = load_config()
@@ -17,9 +23,23 @@ DEFAULT_QUIZ_MARKDOWN = "尚未產生題目。"
 INPUT_MODE_VIDEO = "video"
 INPUT_MODE_TRANSCRIPT = "manual_transcript"
 INPUT_MODE_SUBTITLE = "subtitle_file"
+STATUS_TABLE_HEADERS = ["Step", "Status", "Message", "Artifact"]
+STATUS_ROW_STYLES = {
+    "pending": "background-color: #f3f4f6; color: #374151;",
+    "running": "background-color: #dbeafe; color: #1d4ed8;",
+    "completed": "background-color: #dcfce7; color: #166534;",
+    "failed": "background-color: #fee2e2; color: #b91c1c;",
+    "skipped": "background-color: #e5e7eb; color: #4b5563;",
+}
+PROGRESS_IDLE_HTML = """
+<div style="padding: 12px 14px; border: 1px solid #d1d5db; border-radius: 10px; background: #f9fafb;">
+  <div style="font-weight: 600; color: #111827;">Pipeline Progress</div>
+  <div style="margin-top: 6px; color: #4b5563;">尚未開始執行。</div>
+</div>
+""".strip()
 
 
-def format_status_rows(state: PipelineRunState) -> list[list[str]]:
+def format_status_rows(state: PipelineRunState):
     rows: list[list[str]] = []
     for key, label in PipelineService.STEP_ORDER:
         step = state.steps[key]
@@ -34,7 +54,15 @@ def format_status_rows(state: PipelineRunState) -> list[list[str]]:
                 step.artifact_path or "",
             ]
         )
-    return rows
+    status_frame = pd.DataFrame(rows, columns=STATUS_TABLE_HEADERS)
+    return status_frame.style.apply(
+        lambda row: [STATUS_ROW_STYLES.get(str(row["Status"]), "")] * len(row),
+        axis=1,
+    )
+
+
+def format_keywords(state: PipelineRunState) -> dict[str, Any]:
+    return {"auto_keywords": state.keywords}
 
 
 def format_chunks(state: PipelineRunState) -> list[dict[str, Any]]:
@@ -76,6 +104,54 @@ def format_run_info(state: PipelineRunState) -> dict[str, Any]:
     }
 
 
+def format_progress_html(state: PipelineRunState) -> str:
+    progress_percent = 0
+    accent = "#2563eb"
+    title = "等待執行"
+    description = "尚未開始執行。"
+
+    for step_key, step_label in PipelineService.STEP_ORDER:
+        step = state.steps[step_key]
+        start, end = PipelineService.STEP_PROGRESS[step_key]
+
+        if step.status in {"completed", "skipped"}:
+            progress_percent = int(end * 100)
+            title = f"{step_label} 完成"
+            description = step.message or f"{step_label} completed"
+            accent = "#16a34a" if step.status == "completed" else "#6b7280"
+            continue
+
+        if step.status == "running":
+            progress_percent = int(((start + end) / 2) * 100)
+            title = f"{step_label} 進行中"
+            description = step.message or f"{step_label} running"
+            accent = "#2563eb"
+            break
+
+        if step.status == "failed":
+            progress_percent = int(start * 100)
+            title = f"{step_label} 失敗"
+            description = step.error or step.message or f"{step_label} failed"
+            accent = "#dc2626"
+            break
+
+        break
+
+    return f"""
+<div style="padding: 12px 14px; border: 1px solid #d1d5db; border-radius: 10px; background: #f9fafb;">
+  <div style="display: flex; justify-content: space-between; gap: 12px; align-items: baseline;">
+    <div style="font-weight: 600; color: #111827;">Pipeline Progress</div>
+    <div style="font-size: 13px; color: {accent};">{progress_percent}%</div>
+  </div>
+  <div style="margin-top: 8px; height: 10px; background: #e5e7eb; border-radius: 999px; overflow: hidden;">
+    <div style="height: 100%; width: {progress_percent}%; background: {accent};"></div>
+  </div>
+  <div style="margin-top: 8px; font-weight: 600; color: #1f2937;">{title}</div>
+  <div style="margin-top: 4px; color: #4b5563;">{description}</div>
+</div>
+""".strip()
+
+
 def normalize_selected_inputs(
     input_mode: str,
     video_path: str | None,
@@ -92,19 +168,23 @@ def normalize_selected_inputs(
 def _build_incremental_result_updates(
     state: PipelineRunState,
     *,
-    reset_unfinished: bool,
+    clear_transcript: bool = False,
+    clear_keywords: bool = False,
+    clear_chunks: bool = False,
+    clear_retrieval: bool = False,
+    clear_quiz: bool = False,
 ) -> tuple[Any, Any, Any, Any, Any]:
-    transcript_output: Any = "" if reset_unfinished else gr.skip()
-    keywords_output: Any = None if reset_unfinished else gr.skip()
-    chunks_output: Any = None if reset_unfinished else gr.skip()
-    retrieval_output: Any = None if reset_unfinished else gr.skip()
-    quiz_json_output: Any = None if reset_unfinished else gr.skip()
+    transcript_output: Any = "" if clear_transcript else gr.skip()
+    keywords_output: Any = None if clear_keywords else gr.skip()
+    chunks_output: Any = None if clear_chunks else gr.skip()
+    retrieval_output: Any = None if clear_retrieval else gr.skip()
+    quiz_json_output: Any = None if clear_quiz else gr.skip()
 
     if state.steps["asr"].status in {"completed", "skipped"} and state.transcript:
         transcript_output = state.transcript
 
     if state.steps["summary"].status == "completed":
-        keywords_output = {"keywords": state.keywords}
+        keywords_output = format_keywords(state)
 
     if state.steps["chunking"].status == "completed":
         chunks_output = format_chunks(state)
@@ -135,10 +215,18 @@ def render_pipeline_outputs(
         chunks_output,
         retrieval_output,
         quiz_json_output,
-    ) = _build_incremental_result_updates(state, reset_unfinished=reset_unfinished)
+    ) = _build_incremental_result_updates(
+        state,
+        clear_transcript=reset_unfinished,
+        clear_keywords=reset_unfinished,
+        clear_chunks=reset_unfinished,
+        clear_retrieval=reset_unfinished,
+        clear_quiz=reset_unfinished,
+    )
 
     return (
         state.model_dump(mode="json"),
+        format_progress_html(state),
         format_run_info(state),
         format_status_rows(state),
         transcript_output,
@@ -149,20 +237,61 @@ def render_pipeline_outputs(
     )
 
 
-def render_regeneration_outputs(state: PipelineRunState) -> tuple:
-    quiz_json_output: Any = gr.skip()
-
-    if state.steps["quiz"].status == "completed" and state.quiz_result:
-        quiz_json_output = state.quiz_result.model_dump(mode="json")
+def render_rag_outputs(
+    state: PipelineRunState,
+    *,
+    reset_unfinished: bool = False,
+) -> tuple:
+    (
+        transcript_output,
+        keywords_output,
+        chunks_output,
+        retrieval_output,
+        quiz_json_output,
+    ) = _build_incremental_result_updates(
+        state,
+        clear_retrieval=reset_unfinished,
+        clear_quiz=reset_unfinished,
+    )
 
     return (
         state.model_dump(mode="json"),
+        format_progress_html(state),
         format_run_info(state),
         format_status_rows(state),
-        gr.skip(),
-        gr.skip(),
-        gr.skip(),
-        gr.skip(),
+        transcript_output,
+        keywords_output,
+        chunks_output,
+        retrieval_output,
+        quiz_json_output,
+    )
+
+
+def render_regeneration_outputs(
+    state: PipelineRunState,
+    *,
+    reset_unfinished: bool = False,
+) -> tuple:
+    (
+        transcript_output,
+        keywords_output,
+        chunks_output,
+        retrieval_output,
+        quiz_json_output,
+    ) = _build_incremental_result_updates(
+        state,
+        clear_quiz=reset_unfinished,
+    )
+
+    return (
+        state.model_dump(mode="json"),
+        format_progress_html(state),
+        format_run_info(state),
+        format_status_rows(state),
+        transcript_output,
+        keywords_output,
+        chunks_output,
+        retrieval_output,
         quiz_json_output,
     )
 
@@ -180,7 +309,6 @@ def run_pipeline_ui(
     top_k: int,
     chunk_size: int,
     chunk_overlap: int,
-    progress: gr.Progress = gr.Progress(track_tqdm=False),
 ):
     selected_video_path, selected_transcript_text, selected_subtitle_path = normalize_selected_inputs(
         input_mode,
@@ -196,9 +324,6 @@ def run_pipeline_ui(
     )
     service = build_service()
 
-    def progress_callback(value: float, desc: str) -> None:
-        progress(value, desc=desc)
-
     is_first_yield = True
     for state in service.stream_pipeline(
         mode="live",
@@ -206,7 +331,6 @@ def run_pipeline_ui(
         video_path=selected_video_path,
         transcript_text=selected_transcript_text,
         subtitle_path=selected_subtitle_path,
-        progress_callback=progress_callback,
     ):
         yield render_pipeline_outputs(state, reset_unfinished=is_first_yield)
         is_first_yield = False
@@ -217,50 +341,62 @@ def regenerate_ui(
     custom_question_text: str,
     *,
     options_only: bool,
-    progress: gr.Progress = gr.Progress(track_tqdm=False),
 ):
     if not state_payload:
         raise gr.Error("請先執行 Run Pipeline。")
 
     service = build_service()
 
-    def progress_callback(value: float, desc: str) -> None:
-        progress(value, desc=desc)
-
     custom_questions = parse_custom_question_lines(custom_question_text) if options_only else None
 
+    is_first_yield = True
     for state in service.stream_regenerate_quiz(
         run_state_payload=state_payload,
         options_only=options_only,
         custom_questions=custom_questions,
-        progress_callback=progress_callback,
     ):
-        yield render_regeneration_outputs(state)
+        yield render_regeneration_outputs(state, reset_unfinished=is_first_yield)
+        is_first_yield = False
+
+
+def run_rag_ui(
+    state_payload: dict | None,
+    custom_keywords_text: str,
+):
+    if not state_payload:
+        raise gr.Error("請先執行 Run Pipeline。")
+
+    service = build_service()
+    custom_keywords = parse_custom_keywords(custom_keywords_text)
+
+    is_first_yield = True
+    for state in service.stream_rag_retrieval(
+        run_state_payload=state_payload,
+        custom_keywords=custom_keywords,
+    ):
+        yield render_rag_outputs(state, reset_unfinished=is_first_yield)
+        is_first_yield = False
 
 
 def regenerate_quiz_ui(
     state_payload: dict | None,
     custom_question_text: str,
-    progress: gr.Progress = gr.Progress(track_tqdm=False),
 ):
     yield from regenerate_ui(
         state_payload,
         custom_question_text,
         options_only=False,
-        progress=progress,
     )
 
 
 def regenerate_options_only_ui(
     state_payload: dict | None,
     custom_question_text: str,
-    progress: gr.Progress = gr.Progress(track_tqdm=False),
 ):
     yield from regenerate_ui(
         state_payload,
         custom_question_text,
         options_only=True,
-        progress=progress,
     )
 
 
@@ -320,9 +456,10 @@ def build_demo() -> gr.Blocks:
         subtitle_tab.select(fn=lambda: INPUT_MODE_SUBTITLE, outputs=[input_mode_state])
 
         gr.Markdown("## Pipeline Status")
+        progress_output = gr.HTML(value=PROGRESS_IDLE_HTML, label="Pipeline Progress")
         run_info = gr.JSON(label="Run Metadata")
         status_table = gr.Dataframe(
-            headers=["Step", "Status", "Message", "Artifact"],
+            headers=STATUS_TABLE_HEADERS,
             datatype=["str", "str", "str", "str"],
             interactive=False,
             wrap=True,
@@ -340,6 +477,13 @@ def build_demo() -> gr.Blocks:
         with gr.Accordion("Intermediate Results", open=False):
             transcript_output = gr.Textbox(label="Transcript", lines=10)
             keywords_output = gr.JSON(label="Extracted Keywords")
+            with gr.Row():
+                custom_keywords_input = gr.Textbox(
+                    label="Custom Keywords for RAG",
+                    lines=3,
+                    placeholder="可用逗號或換行分隔。留空則使用自動關鍵字。",
+                )
+                run_rag_button = gr.Button("進行RAG", variant="secondary")
             chunks_output = gr.JSON(label="Chunks")
             retrieval_output = gr.JSON(label="Retrieved Relevant Chunks")
 
@@ -372,6 +516,7 @@ def build_demo() -> gr.Blocks:
 
         output_components = [
             state_store,
+            progress_output,
             run_info,
             status_table,
             transcript_output,
@@ -394,21 +539,28 @@ def build_demo() -> gr.Blocks:
                 chunk_overlap_input,
             ],
             outputs=output_components,
-            show_progress="minimal",
+            show_progress="hidden",
+        )
+
+        run_rag_button.click(
+            fn=run_rag_ui,
+            inputs=[state_store, custom_keywords_input],
+            outputs=output_components,
+            show_progress="hidden",
         )
 
         regenerate_button.click(
             fn=regenerate_quiz_ui,
             inputs=[state_store, custom_question_input],
             outputs=output_components,
-            show_progress="minimal",
+            show_progress="hidden",
         )
 
         regenerate_options_button.click(
             fn=regenerate_options_only_ui,
             inputs=[state_store, custom_question_input],
             outputs=output_components,
-            show_progress="minimal",
+            show_progress="hidden",
         )
 
     return demo

@@ -50,7 +50,11 @@ class FakeChunkService:
 
 
 class FakeEmbeddingService:
+    def __init__(self) -> None:
+        self.last_keywords = None
+
     def retrieve(self, chunks, keywords, top_k: int, progress_callback=None) -> RetrievalResult:
+        self.last_keywords = list(keywords)
         return RetrievalResult(
             query=", ".join(keywords),
             top_k=top_k,
@@ -70,8 +74,10 @@ class FakeQuizService:
     def __init__(self) -> None:
         self.last_existing_questions = None
         self.last_question_stems = None
+        self.generate_call_count = 0
 
     def generate_quiz(self, context_chunks, variant: int = 0, progress_callback=None) -> QuizResult:
+        self.generate_call_count += 1
         return QuizResult(
             questions=[
                 QuizQuestion(
@@ -122,6 +128,7 @@ class FakeQuizService:
 class SequentialPipelineService(PipelineService):
     def __init__(self, config, server_manager=None) -> None:
         super().__init__(config, server_manager)
+        self.fake_embedding_service = FakeEmbeddingService()
         self.fake_quiz_service = FakeQuizService()
 
     def _build_services(self, mode: str):
@@ -129,7 +136,7 @@ class SequentialPipelineService(PipelineService):
             "asr": None,
             "summary": FakeSummaryService(),
             "chunk": FakeChunkService(),
-            "embedding": FakeEmbeddingService(),
+            "embedding": self.fake_embedding_service,
             "quiz": self.fake_quiz_service,
         }
 
@@ -246,6 +253,98 @@ class PipelineServiceTest(unittest.TestCase):
                     "Why does traversal order matter?",
                 ],
             )
+
+    def test_regeneration_clears_existing_quiz_before_new_output_arrives(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            config = AppConfig(project_root=Path(tempdir))
+            config.ensure_directories()
+            service = SequentialPipelineService(config)
+            parameters = PipelineParameters(n_keywords=4, top_k=3, chunk_size=80, chunk_overlap=10)
+
+            final_state = list(
+                service.stream_pipeline(
+                    mode="live",
+                    parameters=parameters,
+                    video_path=None,
+                    transcript_text="Binary search tree example.",
+                    subtitle_path=None,
+                )
+            )[-1]
+
+            regeneration_states = list(
+                service.stream_regenerate_quiz(
+                    run_state_payload=final_state.model_dump(mode="json"),
+                    options_only=False,
+                )
+            )
+
+            self.assertIsNone(regeneration_states[0].quiz_result)
+            self.assertEqual(regeneration_states[0].steps["quiz"].status, "running")
+            self.assertIsNotNone(regeneration_states[-1].quiz_result)
+            self.assertEqual(regeneration_states[-1].steps["quiz"].status, "completed")
+
+    def test_rag_retrieval_can_use_custom_keywords_without_generating_quiz(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            config = AppConfig(project_root=Path(tempdir))
+            config.ensure_directories()
+            service = SequentialPipelineService(config)
+            parameters = PipelineParameters(n_keywords=4, top_k=3, chunk_size=80, chunk_overlap=10)
+
+            final_state = list(
+                service.stream_pipeline(
+                    mode="live",
+                    parameters=parameters,
+                    video_path=None,
+                    transcript_text=(
+                        "Binary search trees support efficient search and insertion. "
+                        "Balancing affects time complexity. Traversal order changes the output sequence."
+                    ),
+                    subtitle_path=None,
+                )
+            )[-1]
+
+            initial_generate_count = service.fake_quiz_service.generate_call_count
+            rag_states = list(
+                service.stream_rag_retrieval(
+                    run_state_payload=final_state.model_dump(mode="json"),
+                    custom_keywords=["balancing", "traversal"],
+                )
+            )
+
+            self.assertEqual(service.fake_embedding_service.last_keywords, ["balancing", "traversal"])
+            self.assertEqual(service.fake_quiz_service.generate_call_count, initial_generate_count)
+            self.assertIsNone(rag_states[0].quiz_result)
+            self.assertEqual(rag_states[0].steps["quiz"].status, "pending")
+            self.assertIsNone(rag_states[-1].quiz_result)
+            self.assertEqual(rag_states[-1].steps["retrieval"].status, "completed")
+            self.assertEqual(rag_states[-1].steps["quiz"].status, "pending")
+            self.assertIn("Manually regenerate quiz", rag_states[-1].steps["quiz"].message)
+
+    def test_rag_retrieval_falls_back_to_auto_keywords(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            config = AppConfig(project_root=Path(tempdir))
+            config.ensure_directories()
+            service = SequentialPipelineService(config)
+            parameters = PipelineParameters(n_keywords=4, top_k=3, chunk_size=80, chunk_overlap=10)
+
+            final_state = list(
+                service.stream_pipeline(
+                    mode="live",
+                    parameters=parameters,
+                    video_path=None,
+                    transcript_text="Binary search tree example.",
+                    subtitle_path=None,
+                )
+            )[-1]
+
+            list(
+                service.stream_rag_retrieval(
+                    run_state_payload=final_state.model_dump(mode="json"),
+                    custom_keywords=[],
+                )
+            )
+
+            self.assertEqual(service.fake_embedding_service.last_keywords, ["tree", "search"])
 
     def test_options_regeneration_accepts_custom_questions_without_existing_quiz(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
