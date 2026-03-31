@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 
@@ -41,6 +41,7 @@ class AppConfig:
     uploads_dir: Path | None = None
     runs_dir: Path | None = None
     artifacts_dir: Path | None = None
+    model_info_path: Path | None = None
     default_mode: str = os.getenv("DEMO_DEFAULT_MODE", "live")
     asr_model_name: str = os.getenv("ASR_MODEL_NAME", "MediaTek-Research/Breeze-ASR-25")
     asr_chunk_length_s: int = _env_int("ASR_CHUNK_LENGTH_S", 30)
@@ -83,6 +84,7 @@ class AppConfig:
     summary_server_max_model_len: int = _env_int("SUMMARY_SERVER_MAX_MODEL_LEN", 32768)
     quiz_server_max_model_len: int = _env_int("QUIZ_SERVER_MAX_MODEL_LEN", 8192)
     summary_server_dtype: str = os.getenv("SUMMARY_SERVER_DTYPE", "bfloat16")
+    summary_server_quantization: str | None = os.getenv("SUMMARY_SERVER_QUANTIZATION")
     quiz_server_dtype: str = os.getenv("QUIZ_SERVER_DTYPE", "bfloat16")
     summary_server_tensor_parallel_size: int = _env_int("SUMMARY_SERVER_TP_SIZE", 1)
     quiz_server_tensor_parallel_size: int = _env_int("QUIZ_SERVER_TP_SIZE", 1)
@@ -93,6 +95,7 @@ class AppConfig:
 
     def __post_init__(self) -> None:
         self.project_root = Path(self.project_root)
+        self.model_info_path = Path(self.model_info_path or self.project_root / "model_info.json")
         self.uploads_dir = Path(self.uploads_dir or self.project_root / "data" / "uploads")
         self.artifacts_dir = Path(self.artifacts_dir or self.project_root / "artifacts")
         self.runs_dir = Path(self.runs_dir or self.artifacts_dir / "runs")
@@ -104,6 +107,11 @@ class AppConfig:
     def ensure_directories(self) -> None:
         for path in (self.uploads_dir, self.artifacts_dir, self.runs_dir):
             path.mkdir(parents=True, exist_ok=True)
+
+    def copy_with_overrides(self, **overrides: object) -> "AppConfig":
+        config = replace(self, **overrides)
+        config.ensure_directories()
+        return config
 
 
 def load_config() -> AppConfig:

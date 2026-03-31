@@ -11,6 +11,7 @@
 ```bash
 quiz_gen_demo/
   app.py
+  model_info.json
   services/
     asr_service.py
     summary_service.py
@@ -20,6 +21,7 @@ quiz_gen_demo/
     pipeline_service.py
   utils/
     config.py
+    model_registry.py
     schemas.py
     storage.py
   data/uploads/
@@ -111,6 +113,8 @@ pip install -r requirements.txt
 conda run -n demo python app.py
 ```
 
+啟動後，`Run Pipeline` 旁邊會提供 `Summary Model` 與 `Quiz Model` 兩個下拉選單。兩者都從 repo 內的 `model_info.json` 載入，並在你按下 `Run Pipeline` 的當下鎖定到該次 run；後續的 `RAG` / `Regenerate` 會沿用同一份 run snapshot，不會因為 UI 下拉選單後來變動而改掉。
+
 預設會啟在：
 
 ```bash
@@ -149,6 +153,24 @@ AUTO_START_MODEL_SERVERS=0 conda run -n demo python app.py
 ```
 
 ## 模型對接位置
+
+### model_info.json
+
+檔案：`model_info.json`
+
+`Summary Model` 與 `Quiz Model` 下拉選單都從這個檔案讀取。格式分成：
+
+- `defaults.summary_model_id`
+- `defaults.quiz_model_id`
+- `summary_models[]`
+- `quiz_models[]`
+
+其中：
+
+- `summary_models[]` 需要提供 model id、label、API `base_url`、對應的 served `model_name`，以及啟動 summary server 所需的 conda env / base model / vLLM 參數。
+- `quiz_models[]` 除了上述欄位外，還需要提供 `lora_path`，讓 quiz server 能用該 adapter 啟動。
+
+如果你要新增可選模型，優先改這個檔案，而不是直接改 `app.py`。
 
 ### 1. ASR
 

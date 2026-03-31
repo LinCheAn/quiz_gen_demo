@@ -167,21 +167,27 @@ class ModelServerManager:
             "vllm",
             "serve",
             self.config.summary_server_model,
-            "--host",
-            host,
-            "--port",
-            str(port),
-            "--served-model-name",
-            self.config.summary_model_name,
-            "--tensor-parallel-size",
-            str(self.config.summary_server_tensor_parallel_size),
-            "--gpu-memory-utilization",
-            str(self.config.summary_server_gpu_memory_utilization),
-            "--max-model-len",
-            str(self.config.summary_server_max_model_len),
-            "--dtype",
-            self.config.summary_server_dtype,
         ]
+        if self.config.summary_server_quantization:
+            command.extend(["--quantization", self.config.summary_server_quantization])
+        command.extend(
+            [
+                "--host",
+                host,
+                "--port",
+                str(port),
+                "--served-model-name",
+                self.config.summary_model_name,
+                "--tensor-parallel-size",
+                str(self.config.summary_server_tensor_parallel_size),
+                "--gpu-memory-utilization",
+                str(self.config.summary_server_gpu_memory_utilization),
+                "--max-model-len",
+                str(self.config.summary_server_max_model_len),
+            ]
+        )
+        if self.config.summary_server_dtype:
+            command.extend(["--dtype", self.config.summary_server_dtype])
         return ManagedServerSpec(
             name="summary",
             base_url=self.config.summary_base_url,

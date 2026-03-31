@@ -12,7 +12,13 @@ from services.summary_service import SummaryService
 from utils.config import AppConfig, load_config
 from utils.errors import ModelResponseFormatError
 from utils.server_manager import ModelServerManager
-from utils.schemas import PipelineParameters, PipelineRunState, StepStatus, utc_now_iso
+from utils.schemas import (
+    ModelSelectionSnapshot,
+    PipelineParameters,
+    PipelineRunState,
+    StepStatus,
+    utc_now_iso,
+)
 from utils.storage import RunArtifactManager, make_run_id
 
 
@@ -45,9 +51,11 @@ class PipelineService:
         self,
         config: AppConfig | None = None,
         server_manager: ModelServerManager | None = None,
+        selected_models: ModelSelectionSnapshot | None = None,
     ) -> None:
         self.config = config or load_config()
         self.server_manager = server_manager
+        self.selected_models = selected_models
 
     def stream_pipeline(
         self,
@@ -363,6 +371,7 @@ class PipelineService:
             mode=mode,  # type: ignore[arg-type]
             overview=self.OVERVIEW_TEXT,
             parameters=parameters,
+            selected_models=self.selected_models.model_copy(deep=True) if self.selected_models else None,
             steps=steps,
         )
 

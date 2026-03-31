@@ -1,0 +1,62 @@
+{
+  "defaults": {
+    "summary_model_id": "qwen3.5-4b",
+    "quiz_model_id": "grpo-v4.2"
+  },
+  "summary_models": [
+    {
+      "id": "qwen3.5-4b",
+      "label": "Qwen 3.5 4B",
+      "model_name": "Qwen/Qwen3.5-4B",
+      "base_url": "http://127.0.0.1:8001/v1",
+      "server_conda_env": "vllm",
+      "server_model": "Qwen/Qwen3.5-4B",
+      "gpu_memory_utilization": 0.9,
+      "max_model_len": 32768,
+      "tensor_parallel_size": 1,
+      "dtype": "bfloat16",
+      "quantization": null
+    },
+    {
+      "id": "grpo-v4.2-fp8",
+      "label": "GRPO v4.2 FP8",
+      "model_name": "grpo_v4.2",
+      "base_url": "http://127.0.0.1:8000/v1",
+      "server_conda_env": "vllm",
+      "server_model": "unsloth/Meta-Llama-3.1-8B-Instruct",
+      "lora_path": "/home/r13922145/rl_model/grpo_v4.2",
+      "gpu_memory_utilization": 0.8,
+      "max_model_len": 8192,
+      "tensor_parallel_size": 1,
+      "quantization": "fp8"
+    }
+  ],
+  "quiz_models": [
+    {
+      "id": "grpo-v4.2",
+      "label": "GRPO v4.2",
+      "model_name": "grpo_v4.2",
+      "base_url": "http://127.0.0.1:8000/v1",
+      "server_conda_env": "vllm",
+      "server_model": "unsloth/Meta-Llama-3.1-8B-Instruct",
+      "lora_path": "/home/r13922145/rl_model/grpo_v4.2",
+      "gpu_memory_utilization": 0.8,
+      "max_model_len": 8192,
+      "tensor_parallel_size": 1,
+      "dtype": "bfloat16"
+    },
+    {
+      "id": "grpo-v4.2-fp8",
+      "label": "GRPO v4.2 FP8",
+      "model_name": "grpo_v4.2",
+      "base_url": "http://127.0.0.1:8000/v1",
+      "server_conda_env": "vllm",
+      "server_model": "unsloth/Meta-Llama-3.1-8B-Instruct",
+      "lora_path": "/home/r13922145/rl_model/grpo_v4.2",
+      "gpu_memory_utilization": 0.8,
+      "max_model_len": 8192,
+      "tensor_parallel_size": 1,
+      "quantization": "fp8"
+    }
+  ]
+}

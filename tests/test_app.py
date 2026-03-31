@@ -2,11 +2,21 @@ from __future__ import annotations
 
 import unittest
 
-from app import STATUS_TABLE_HEADERS, format_progress_html, format_status_rows, render_rag_outputs, render_regeneration_outputs
+from app import (
+    APP_MODEL_REGISTRY,
+    STATUS_TABLE_HEADERS,
+    build_demo,
+    format_progress_html,
+    format_run_info,
+    format_status_rows,
+    render_rag_outputs,
+    render_regeneration_outputs,
+)
 from utils.schemas import PipelineParameters, PipelineRunState, QuizQuestion, QuizResult, RetrievedChunk, StepStatus, TextChunk
 
 
 def make_state() -> PipelineRunState:
+    selection = APP_MODEL_REGISTRY.resolve_selection()
     steps = {
         "input": StepStatus(key="input", label="Input", status="completed", message="ready"),
         "asr": StepStatus(key="asr", label="ASR", status="skipped", message="used transcript"),
@@ -19,7 +29,11 @@ def make_state() -> PipelineRunState:
         run_id="run_123",
         mode="live",
         overview="demo",
-        parameters=PipelineParameters(),
+        parameters=PipelineParameters(
+            summary_model_id=selection.summary.id,
+            quiz_model_id=selection.quiz.id,
+        ),
+        selected_models=selection,
         steps=steps,
         transcript="binary search tree transcript",
         keywords=["tree", "search"],
@@ -50,6 +64,16 @@ def make_state() -> PipelineRunState:
 
 
 class AppRenderingTest(unittest.TestCase):
+    def _build_demo_config(self) -> dict:
+        return build_demo().get_config_file()
+
+    def _find_component(self, config: dict, text: str) -> dict:
+        for component in config["components"]:
+            props = component.get("props", {})
+            if props.get("label") == text or props.get("value") == text:
+                return component
+        self.fail(f"Component not found: {text}")
+
     def test_format_status_rows_returns_styled_dataframe(self) -> None:
         styled = format_status_rows(make_state())
 
@@ -90,6 +114,26 @@ class AppRenderingTest(unittest.TestCase):
 
         self.assertIn("Embedding Retrieval 失敗", html)
         self.assertIn("embedding crashed", html)
+
+    def test_run_metadata_uses_selected_models_snapshot(self) -> None:
+        state = make_state()
+
+        run_info = format_run_info(state)
+
+        self.assertEqual(run_info["summary_model_id"], state.selected_models.summary.id)
+        self.assertEqual(run_info["quiz_model_id"], state.selected_models.quiz.id)
+        self.assertEqual(run_info["selected_models"]["quiz"]["lora_path"], state.selected_models.quiz.lora_path)
+
+    def test_build_demo_includes_model_dropdowns_with_registry_defaults(self) -> None:
+        config = self._build_demo_config()
+
+        summary_model = self._find_component(config, "Summary Model")
+        quiz_model = self._find_component(config, "Quiz Model")
+
+        self.assertEqual(summary_model["type"], "dropdown")
+        self.assertEqual(quiz_model["type"], "dropdown")
+        self.assertEqual(summary_model["props"]["value"], APP_MODEL_REGISTRY.defaults.summary_model_id)
+        self.assertEqual(quiz_model["props"]["value"], APP_MODEL_REGISTRY.defaults.quiz_model_id)
 
 
 if __name__ == "__main__":
