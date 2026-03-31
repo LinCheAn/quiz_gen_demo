@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+artifacts/
+data/uploads/
+
+codex_gradio_demo_prompt.md
