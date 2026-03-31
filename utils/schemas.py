@@ -31,6 +31,8 @@ class PipelineParameters(BaseModel):
     chunk_overlap: int = 64
     summary_model_id: str | None = None
     quiz_model_id: str | None = None
+    quiz_question_count: int = 3
+    quiz_variant_count: int = 1
 
 
 class SummaryModelPreset(BaseModel):
@@ -139,6 +141,7 @@ class PipelineRunState(BaseModel):
     chunks: list[TextChunk] = Field(default_factory=list)
     retrieved_chunks: list[RetrievedChunk] = Field(default_factory=list)
     quiz_result: QuizResult | None = None
+    quiz_results: list[QuizResult] = Field(default_factory=list)
     quiz_generation_count: int = 0
     errors: list[str] = Field(default_factory=list)
     created_at: str = Field(default_factory=utc_now_iso)

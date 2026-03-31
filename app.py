@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import socket
 from typing import Any
 
 import gradio as gr
@@ -9,7 +10,7 @@ from services.pipeline_service import PipelineService
 from utils.config import load_config
 from utils.model_registry import ModelRegistry, build_runtime_config
 from utils.server_manager import ModelServerManager
-from utils.schemas import ModelSelectionSnapshot, PipelineParameters, PipelineRunState
+from utils.schemas import ModelSelectionSnapshot, PipelineParameters, PipelineRunState, QuizResult
 from utils.ui_helpers import (
     append_custom_question,
     format_question_markdown,
@@ -37,6 +38,27 @@ PROGRESS_IDLE_HTML = """
   <div style="font-weight: 600; color: #111827;">Pipeline Progress</div>
   <div style="margin-top: 6px; color: #4b5563;">尚未開始執行。</div>
 </div>
+""".strip()
+QUIZ_OUTPUT_CSS = """
+.quiz-output-question {
+  font-size: 1.12rem;
+  line-height: 1.7;
+}
+
+.quiz-output-question h3 {
+  font-size: 1.35rem;
+  line-height: 1.45;
+  margin-bottom: 0.85rem;
+}
+
+.quiz-output-question p,
+.quiz-output-question li {
+  font-size: 1.12rem;
+}
+
+.quiz-output-question li {
+  margin-bottom: 0.35rem;
+}
 """.strip()
 
 
@@ -74,14 +96,12 @@ def format_retrieval(state: PipelineRunState) -> list[dict[str, Any]]:
     return [item.model_dump(mode="json") for item in state.retrieved_chunks]
 
 
-def format_quiz_markdown(state: PipelineRunState) -> str:
-    if not state.quiz_result:
-        return "尚未產生題目。"
-    lines = [f"### Quiz Output v{state.quiz_generation_count}"]
-    for index, question in enumerate(state.quiz_result.questions, start=1):
-        lines.append(format_question_markdown(question, index=index))
-        lines.append("")
-    return "\n".join(lines)
+def resolve_quiz_results(state: PipelineRunState) -> list[QuizResult]:
+    if state.quiz_results:
+        return state.quiz_results
+    if state.quiz_result:
+        return [state.quiz_result]
+    return []
 
 
 def resolve_state_model_selection(state: PipelineRunState) -> ModelSelectionSnapshot:
@@ -103,6 +123,9 @@ def format_run_info(state: PipelineRunState) -> dict[str, Any]:
         "parameters": state.parameters.model_dump(mode="json"),
         "quiz_generation_count": state.quiz_generation_count,
         "summary_model_id": model_selection.summary.id,
+        "quiz_versions_available": len(resolve_quiz_results(state)),
+        "asr_model_name": APP_CONFIG.asr_model_name,
+        "asr_conda_env": APP_CONFIG.asr_conda_env,
         "summary_model_name": model_selection.summary.model_name,
         "summary_base_url": model_selection.summary.base_url,
         "embedding_model_name": APP_CONFIG.embedding_model_name,
@@ -187,18 +210,18 @@ def _build_incremental_result_updates(
     clear_keywords: bool = False,
     clear_chunks: bool = False,
     clear_retrieval: bool = False,
-    clear_quiz: bool = False,
 ) -> tuple[Any, Any, Any, Any, Any]:
     transcript_output: Any = "" if clear_transcript else gr.skip()
+    current_keywords_output: Any = None if clear_keywords else gr.skip()
     keywords_output: Any = None if clear_keywords else gr.skip()
     chunks_output: Any = None if clear_chunks else gr.skip()
     retrieval_output: Any = None if clear_retrieval else gr.skip()
-    quiz_json_output: Any = None if clear_quiz else gr.skip()
 
     if state.steps["asr"].status in {"completed", "skipped"} and state.transcript:
         transcript_output = state.transcript
 
     if state.steps["summary"].status == "completed":
+        current_keywords_output = format_keywords(state)
         keywords_output = format_keywords(state)
 
     if state.steps["chunking"].status == "completed":
@@ -207,15 +230,12 @@ def _build_incremental_result_updates(
     if state.steps["retrieval"].status == "completed":
         retrieval_output = format_retrieval(state)
 
-    if state.steps["quiz"].status == "completed" and state.quiz_result:
-        quiz_json_output = state.quiz_result.model_dump(mode="json")
-
     return (
         transcript_output,
+        current_keywords_output,
         keywords_output,
         chunks_output,
         retrieval_output,
-        quiz_json_output,
     )
 
 
@@ -226,17 +246,16 @@ def render_pipeline_outputs(
 ) -> tuple:
     (
         transcript_output,
+        current_keywords_output,
         keywords_output,
         chunks_output,
         retrieval_output,
-        quiz_json_output,
     ) = _build_incremental_result_updates(
         state,
         clear_transcript=reset_unfinished,
         clear_keywords=reset_unfinished,
         clear_chunks=reset_unfinished,
         clear_retrieval=reset_unfinished,
-        clear_quiz=reset_unfinished,
     )
 
     return (
@@ -245,10 +264,10 @@ def render_pipeline_outputs(
         format_run_info(state),
         format_status_rows(state),
         transcript_output,
+        current_keywords_output,
         keywords_output,
         chunks_output,
         retrieval_output,
-        quiz_json_output,
     )
 
 
@@ -259,14 +278,13 @@ def render_rag_outputs(
 ) -> tuple:
     (
         transcript_output,
+        current_keywords_output,
         keywords_output,
         chunks_output,
         retrieval_output,
-        quiz_json_output,
     ) = _build_incremental_result_updates(
         state,
         clear_retrieval=reset_unfinished,
-        clear_quiz=reset_unfinished,
     )
 
     return (
@@ -275,10 +293,10 @@ def render_rag_outputs(
         format_run_info(state),
         format_status_rows(state),
         transcript_output,
+        current_keywords_output,
         keywords_output,
         chunks_output,
         retrieval_output,
-        quiz_json_output,
     )
 
 
@@ -289,13 +307,12 @@ def render_regeneration_outputs(
 ) -> tuple:
     (
         transcript_output,
+        current_keywords_output,
         keywords_output,
         chunks_output,
         retrieval_output,
-        quiz_json_output,
     ) = _build_incremental_result_updates(
         state,
-        clear_quiz=reset_unfinished,
     )
 
     return (
@@ -304,10 +321,10 @@ def render_regeneration_outputs(
         format_run_info(state),
         format_status_rows(state),
         transcript_output,
+        current_keywords_output,
         keywords_output,
         chunks_output,
         retrieval_output,
-        quiz_json_output,
     )
 
 
@@ -334,6 +351,8 @@ def run_pipeline_ui(
     top_k: int,
     chunk_size: int,
     chunk_overlap: int,
+    quiz_question_count: int,
+    quiz_variant_count: int,
     summary_model_id: str,
     quiz_model_id: str,
 ):
@@ -348,6 +367,8 @@ def run_pipeline_ui(
         top_k=top_k,
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
+        quiz_question_count=quiz_question_count,
+        quiz_variant_count=quiz_variant_count,
         summary_model_id=summary_model_id,
         quiz_model_id=quiz_model_id,
     )
@@ -437,6 +458,7 @@ def build_demo() -> gr.Blocks:
     default_selection = APP_MODEL_REGISTRY.resolve_selection()
 
     with gr.Blocks(title="Video Quiz Generation Demo") as demo:
+        gr.HTML(f"<style>{QUIZ_OUTPUT_CSS}</style>")
         gr.Markdown(
             """
             # Video to Quiz Demo
@@ -448,6 +470,7 @@ def build_demo() -> gr.Blocks:
             此 UI 僅支援 `live` 模式，任何模型錯誤都會直接在對應 step 失敗，不會回退到 mock 或本地替代輸出。
             `AUTO_START_MODEL_SERVERS={int(config.auto_start_model_servers)}`，
             啟動策略為 `{config.model_server_start_strategy}`，
+            ASR 會在 conda env `{config.asr_conda_env or 'current'}` 執行，
             embedding 會在 conda env `{config.embedding_conda_env}` 執行。
             模型選單來源為 `{config.model_info_path}`。
             """
@@ -484,6 +507,20 @@ def build_demo() -> gr.Blocks:
                 top_k_input = gr.Slider(1, 10, value=5, step=1, label="Retrieval Top-K")
                 chunk_size_input = gr.Slider(128, 2048, value=512, step=64, label="Chunk Size")
                 chunk_overlap_input = gr.Slider(0, 512, value=64, step=16, label="Chunk Overlap")
+                quiz_question_count_input = gr.Slider(
+                    1,
+                    10,
+                    value=config.quiz_question_count,
+                    step=1,
+                    label="Number of Questions",
+                )
+                quiz_variant_count_input = gr.Slider(
+                    1,
+                    5,
+                    value=1,
+                    step=1,
+                    label="Number of Quiz Variants",
+                )
                 summary_model_input = gr.Dropdown(
                     choices=APP_MODEL_REGISTRY.summary_choices(),
                     value=default_selection.summary.id,
@@ -501,37 +538,42 @@ def build_demo() -> gr.Blocks:
 
         gr.Markdown("## Pipeline Status")
         progress_output = gr.HTML(value=PROGRESS_IDLE_HTML, label="Pipeline Progress")
-        run_info = gr.JSON(label="Run Metadata")
-        status_table = gr.Dataframe(
-            headers=STATUS_TABLE_HEADERS,
-            datatype=["str", "str", "str", "str"],
-            interactive=False,
-            wrap=True,
-        )
-
-        with gr.Row():
-            regenerate_button = gr.Button("Regenerate Quiz")
-            regenerate_options_button = gr.Button("Regenerate Options Only")
-        custom_question_input = gr.Textbox(
-            label="Custom Questions for Options-Only Regeneration",
-            lines=4,
-            placeholder="一行一題。若有填寫，Regenerate Options Only 會使用這些題幹續寫選項與答案。",
-        )
-
-        with gr.Accordion("Intermediate Results", open=False):
-            transcript_output = gr.Textbox(label="Transcript", lines=10)
-            keywords_output = gr.JSON(label="Extracted Keywords")
-            with gr.Row():
-                custom_keywords_input = gr.Textbox(
-                    label="Custom Keywords for RAG",
-                    lines=3,
-                    placeholder="可用逗號或換行分隔。留空則使用自動關鍵字。",
+        with gr.Tabs():
+            with gr.Tab("Step 表格"):
+                status_table = gr.Dataframe(
+                    headers=STATUS_TABLE_HEADERS,
+                    datatype=["str", "str", "str", "str"],
+                    interactive=False,
+                    wrap=True,
                 )
-                run_rag_button = gr.Button("進行RAG", variant="secondary")
-            chunks_output = gr.JSON(label="Chunks")
-            retrieval_output = gr.JSON(label="Retrieved Relevant Chunks")
+            with gr.Tab("Intermediate Results"):
+                transcript_output = gr.Textbox(label="Transcript", lines=10)
+                keywords_output = gr.JSON(label="Extracted Keywords")
+                chunks_output = gr.JSON(label="Chunks")
+                retrieval_output = gr.JSON(label="Retrieved Relevant Chunks")
+            with gr.Tab("Run Metadata"):
+                run_info = gr.JSON(label="Run Metadata", show_label=False)
+
+        with gr.Column():
+            custom_question_input = gr.Textbox(
+                label="Custom Questions for Options-Only Regeneration",
+                lines=4,
+                placeholder="一行一題。若有填寫，Regenerate Options Only 會使用這些題幹續寫選項與答案。",
+            )
+            with gr.Row():
+                regenerate_button = gr.Button("Regenerate Quiz")
+                regenerate_options_button = gr.Button("Regenerate Options Only")
+        with gr.Column():
+            custom_keywords_input = gr.Textbox(
+                label="Custom Keywords for RAG",
+                lines=3,
+                placeholder="可用逗號或換行分隔。留空則使用自動關鍵字。",
+            )
+            current_keywords_output = gr.JSON(label="Current Auto Keywords")
+            run_rag_button = gr.Button("進行RAG", variant="secondary")
 
         gr.Markdown("## Final Output")
+
         @gr.render(inputs=[state_store])
         def render_quiz_output(state_payload: dict | None):
             if not state_payload:
@@ -539,24 +581,35 @@ def build_demo() -> gr.Blocks:
                 return
 
             state = PipelineRunState.model_validate(state_payload)
-            if not state.quiz_result or not state.quiz_result.questions:
+            quiz_results = resolve_quiz_results(state)
+            if not quiz_results:
                 gr.Markdown(DEFAULT_QUIZ_MARKDOWN)
                 return
 
-            gr.Markdown(f"### Quiz Output v{state.quiz_generation_count}")
-            for index, question in enumerate(state.quiz_result.questions, start=1):
-                with gr.Row():
-                    with gr.Column(scale=6):
-                        gr.Markdown(format_question_markdown(question, index=index))
-                    with gr.Column(scale=1, min_width=180):
-                        copy_button = gr.Button("帶入自訂題目")
-                        copy_button.click(
-                            fn=lambda existing_text, stem=question.question: append_custom_question(existing_text, stem),
-                            inputs=[custom_question_input],
-                            outputs=[custom_question_input],
-                            show_progress="hidden",
-                        )
-        quiz_json = gr.JSON(label="Quiz JSON")
+            with gr.Tabs():
+                for version_index, quiz_result in enumerate(quiz_results, start=1):
+                    with gr.Tab(f"Quiz v{version_index}"):
+                        gr.Markdown(f"### Quiz Output v{version_index}")
+                        for index, question in enumerate(quiz_result.questions, start=1):
+                            with gr.Row():
+                                with gr.Column(scale=6):
+                                    gr.Markdown(
+                                        format_question_markdown(question, index=index),
+                                        elem_classes=["quiz-output-question"],
+                                    )
+                                with gr.Column(scale=1, min_width=180):
+                                    copy_button = gr.Button("帶入自訂題目")
+                                    copy_button.click(
+                                        fn=lambda existing_text, stem=question.question: append_custom_question(
+                                            existing_text,
+                                            stem,
+                                        ),
+                                        inputs=[custom_question_input],
+                                        outputs=[custom_question_input],
+                                        show_progress="hidden",
+                                    )
+                        with gr.Accordion("Quiz JSON", open=False):
+                            gr.JSON(value=quiz_result.model_dump(mode="json"), show_label=False)
 
         output_components = [
             state_store,
@@ -564,10 +617,10 @@ def build_demo() -> gr.Blocks:
             run_info,
             status_table,
             transcript_output,
+            current_keywords_output,
             keywords_output,
             chunks_output,
             retrieval_output,
-            quiz_json,
         ]
 
         run_button.click(
@@ -581,6 +634,8 @@ def build_demo() -> gr.Blocks:
                 top_k_input,
                 chunk_size_input,
                 chunk_overlap_input,
+                quiz_question_count_input,
+                quiz_variant_count_input,
                 summary_model_input,
                 quiz_model_input,
             ],
@@ -612,13 +667,33 @@ def build_demo() -> gr.Blocks:
     return demo
 
 
+def find_available_port(host: str, start_port: int, max_attempts: int = 20) -> int:
+    bind_host = host or "0.0.0.0"
+    for port in range(start_port, start_port + max_attempts):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                sock.bind((bind_host, port))
+            except OSError:
+                continue
+        return port
+    raise OSError(
+        f"Cannot find empty port in range: {start_port}-{start_port + max_attempts - 1}."
+    )
+
+
 if __name__ == "__main__":
     config = APP_CONFIG
     if config.auto_start_model_servers and config.model_server_start_strategy == "preload":
         default_selection = APP_MODEL_REGISTRY.resolve_selection()
         preload_config = build_runtime_config(config, default_selection)
         ModelServerManager(preload_config).ensure_servers_ready()
+    launch_port = find_available_port(config.app_host, config.app_port)
+    if launch_port != config.app_port:
+        print(
+            f"[gradio] Port {config.app_port} is occupied, falling back to available port {launch_port}."
+        )
     build_demo().queue(default_concurrency_limit=1).launch(
         server_name=config.app_host,
-        server_port=config.app_port,
+        server_port=launch_port,
     )

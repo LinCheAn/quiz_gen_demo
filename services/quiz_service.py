@@ -31,12 +31,14 @@ class QuizService:
         self,
         context_chunks: list[str],
         variant: int = 0,
+        question_count: int | None = None,
         progress_callback: ProgressCallback | None = None,
     ) -> QuizResult:
         return self._generate_live(
             context_chunks,
             variant=variant,
             options_only_for=None,
+            question_count=question_count,
             progress_callback=progress_callback,
         )
 
@@ -44,11 +46,13 @@ class QuizService:
         self,
         context_chunks: list[str],
         variant: int = 1,
+        question_count: int | None = None,
         progress_callback: ProgressCallback | None = None,
     ) -> QuizResult:
         return self.generate_quiz(
             context_chunks=context_chunks,
             variant=variant,
+            question_count=question_count,
             progress_callback=progress_callback,
         )
 
@@ -76,6 +80,7 @@ class QuizService:
         context_chunks: list[str],
         variant: int,
         options_only_for: list[str] | None,
+        question_count: int | None = None,
         progress_callback: ProgressCallback | None = None,
     ) -> QuizResult:
         del variant
@@ -107,6 +112,7 @@ class QuizService:
             questions, raw_response = self._generate_full_questions(
                 client,
                 references,
+                question_count=question_count,
                 progress_callback=progress_callback,
             )
             generation_mode = "full"
@@ -125,10 +131,11 @@ class QuizService:
         self,
         client: Any,
         references: str,
+        question_count: int | None = None,
         progress_callback: ProgressCallback | None = None,
     ) -> tuple[list[QuizQuestion], list[dict[str, Any]]]:
         prompt = self._build_full_quiz_prompt(references)
-        total_questions = max(1, self.config.quiz_question_count)
+        total_questions = max(1, question_count if question_count is not None else self.config.quiz_question_count)
         questions: list[QuizQuestion] = []
         raw_responses: list[dict[str, Any]] = []
 

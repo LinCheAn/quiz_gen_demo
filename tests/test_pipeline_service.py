@@ -77,18 +77,22 @@ class FakeQuizService:
     def __init__(self) -> None:
         self.last_existing_questions = None
         self.last_question_stems = None
+        self.last_question_count = None
         self.generate_call_count = 0
 
-    def generate_quiz(self, context_chunks, variant: int = 0, progress_callback=None) -> QuizResult:
+    def generate_quiz(self, context_chunks, variant: int = 0, question_count: int | None = None, progress_callback=None) -> QuizResult:
         self.generate_call_count += 1
+        self.last_question_count = question_count
+        total_questions = question_count or 1
         return QuizResult(
             questions=[
                 QuizQuestion(
-                    question="What is a tree search concept?",
+                    question=f"What is tree search concept variant {variant} question {index}?",
                     options={"A": "A", "B": "B", "C": "C", "D": "D"},
                     answer="A",
                     explanation="Because.",
                 )
+                for index in range(1, total_questions + 1)
             ],
             model="fake-quiz",
             generation_mode="full",
@@ -124,8 +128,13 @@ class FakeQuizService:
             )
         return self.generate_quiz(context_chunks, variant=variant, progress_callback=progress_callback)
 
-    def regenerate_full(self, context_chunks, variant: int = 1, progress_callback=None) -> QuizResult:
-        return self.generate_quiz(context_chunks, variant=variant, progress_callback=progress_callback)
+    def regenerate_full(self, context_chunks, variant: int = 1, question_count: int | None = None, progress_callback=None) -> QuizResult:
+        return self.generate_quiz(
+            context_chunks,
+            variant=variant,
+            question_count=question_count,
+            progress_callback=progress_callback,
+        )
 
 
 class SequentialPipelineService(PipelineService):
@@ -209,6 +218,8 @@ class PipelineServiceTest(unittest.TestCase):
                 chunk_overlap=10,
                 summary_model_id=selection.summary.id,
                 quiz_model_id=selection.quiz.id,
+                quiz_question_count=3,
+                quiz_variant_count=2,
             )
 
             states = list(
@@ -229,11 +240,15 @@ class PipelineServiceTest(unittest.TestCase):
             self.assertEqual(final_state.steps["asr"].status, "skipped")
             self.assertEqual(final_state.steps["quiz"].status, "completed")
             self.assertTrue(final_state.quiz_result)
-            self.assertEqual(final_state.quiz_generation_count, 1)
+            self.assertEqual(final_state.quiz_generation_count, 2)
+            self.assertEqual(len(final_state.quiz_results), 2)
+            self.assertEqual(len(final_state.quiz_result.questions), 3)
             self.assertEqual(final_state.selected_models, selection)
 
             transcript_path = Path(config.runs_dir) / final_state.run_id / "outputs" / "transcript.txt"
             self.assertTrue(transcript_path.exists())
+            self.assertTrue((Path(config.runs_dir) / final_state.run_id / "outputs" / "quiz_v1.json").exists())
+            self.assertTrue((Path(config.runs_dir) / final_state.run_id / "outputs" / "quiz_v2.json").exists())
 
             regenerated_states = list(
                 service.stream_regenerate_quiz(
@@ -246,7 +261,8 @@ class PipelineServiceTest(unittest.TestCase):
             original_questions = [question.question for question in final_state.quiz_result.questions]
             regenerated_questions = [question.question for question in regenerated_state.quiz_result.questions]
             self.assertEqual(original_questions, regenerated_questions)
-            self.assertEqual(regenerated_state.quiz_generation_count, 2)
+            self.assertEqual(regenerated_state.quiz_generation_count, 3)
+            self.assertEqual(len(regenerated_state.quiz_results), 3)
 
     def test_options_regeneration_can_use_custom_questions(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -295,6 +311,7 @@ class PipelineServiceTest(unittest.TestCase):
                     "Why does traversal order matter?",
                 ],
             )
+            self.assertEqual(len(regenerated_state.quiz_results), 2)
 
     def test_regeneration_clears_existing_quiz_before_new_output_arrives(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -324,6 +341,7 @@ class PipelineServiceTest(unittest.TestCase):
             self.assertEqual(regeneration_states[0].steps["quiz"].status, "running")
             self.assertIsNotNone(regeneration_states[-1].quiz_result)
             self.assertEqual(regeneration_states[-1].steps["quiz"].status, "completed")
+            self.assertEqual(len(regeneration_states[-1].quiz_results), 2)
 
     def test_rag_retrieval_can_use_custom_keywords_without_generating_quiz(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -358,6 +376,7 @@ class PipelineServiceTest(unittest.TestCase):
             self.assertIsNone(rag_states[0].quiz_result)
             self.assertEqual(rag_states[0].steps["quiz"].status, "pending")
             self.assertIsNone(rag_states[-1].quiz_result)
+            self.assertEqual(rag_states[-1].quiz_results, [])
             self.assertEqual(rag_states[-1].steps["retrieval"].status, "completed")
             self.assertEqual(rag_states[-1].steps["quiz"].status, "pending")
             self.assertIn("Manually regenerate quiz", rag_states[-1].steps["quiz"].message)
@@ -422,6 +441,41 @@ class PipelineServiceTest(unittest.TestCase):
                 [question.question for question in regenerated_state.quiz_result.questions],
                 ["What is a tree search concept?"],
             )
+            self.assertEqual(len(regenerated_state.quiz_results), 1)
+
+    def test_full_regeneration_uses_state_question_count(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            config = AppConfig(project_root=Path(tempdir))
+            config.ensure_directories()
+            service = SequentialPipelineService(config)
+            parameters = PipelineParameters(
+                n_keywords=4,
+                top_k=3,
+                chunk_size=80,
+                chunk_overlap=10,
+                quiz_question_count=4,
+                quiz_variant_count=1,
+            )
+
+            final_state = list(
+                service.stream_pipeline(
+                    mode="live",
+                    parameters=parameters,
+                    video_path=None,
+                    transcript_text="Binary search tree example.",
+                    subtitle_path=None,
+                )
+            )[-1]
+
+            regenerated_state = list(
+                service.stream_regenerate_quiz(
+                    run_state_payload=final_state.model_dump(mode="json"),
+                    options_only=False,
+                )
+            )[-1]
+
+            self.assertEqual(service.fake_quiz_service.last_question_count, 4)
+            self.assertEqual(len(regenerated_state.quiz_result.questions), 4)
 
     def test_mock_mode_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
