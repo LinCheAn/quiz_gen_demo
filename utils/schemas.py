@@ -35,6 +35,7 @@ class TranscriptResult(BaseModel):
     transcript: str
     source: str
     language: str = "zh"
+    device: str | None = None
     artifact_path: str | None = None
 
 

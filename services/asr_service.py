@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 from typing import Callable
 
+from services.summary_service import extract_json_fragment
 from utils.config import AppConfig
 from utils.schemas import TranscriptResult
 
@@ -22,24 +25,6 @@ class ASRService:
         audio_output_dir: str,
         progress_callback: ProgressCallback | None = None,
     ) -> TranscriptResult:
-        return self._transcribe_live(video_path, audio_output_dir, progress_callback)
-
-    def _transcribe_live(
-        self,
-        video_path: str,
-        audio_output_dir: str,
-        progress_callback: ProgressCallback | None = None,
-    ) -> TranscriptResult:
-        try:
-            import librosa
-            import numpy as np
-            import torch
-            from transformers import pipeline
-        except ImportError as exc:
-            raise RuntimeError(
-                "librosa, numpy, torch, and transformers are required for live ASR mode"
-            ) from exc
-
         audio_dir = Path(audio_output_dir)
         audio_dir.mkdir(parents=True, exist_ok=True)
         audio_path = audio_dir / f"{Path(video_path).stem}.wav"
@@ -49,42 +34,89 @@ class ASRService:
 
         self._extract_audio(video_path, audio_path)
 
-        device = "cuda" if torch.cuda.is_available() else "cpu"
         if progress_callback:
-            progress_callback(0.15, f"Loading ASR model on {device}")
+            progress_callback(
+                0.15,
+                f"Running ASR in conda env `{self.config.asr_conda_env or 'current'}`",
+            )
 
-        pipe = pipeline(
-            "automatic-speech-recognition",
-            model=self.config.asr_model_name,
-            device=device,
-        )
+        payload = {
+            "audio_path": str(audio_path),
+            "model_name": self.config.asr_model_name,
+            "chunk_length_s": self.config.asr_chunk_length_s,
+        }
+        completed = self._run_worker(payload)
 
         if progress_callback:
-            progress_callback(0.25, "Loading extracted audio")
+            progress_callback(0.9, "Parsing ASR output")
 
-        waveform, sample_rate = librosa.load(str(audio_path), sr=16000)
-        duration_s = librosa.get_duration(y=waveform, sr=sample_rate)
-        chunk_length = self.config.asr_chunk_length_s
-        total_chunks = max(1, int(np.ceil(duration_s / chunk_length)))
-        transcript_parts: list[str] = []
+        parsed = extract_json_fragment(completed.stdout.strip())
+        if parsed is None or "transcript" not in parsed:
+            raise RuntimeError(
+                "ASR worker did not return parsable JSON results. "
+                f"Stdout: {completed.stdout.strip() or '<empty>'}"
+            )
 
-        for index in range(total_chunks):
-            start = int(index * chunk_length * sample_rate)
-            end = min(int((index + 1) * chunk_length * sample_rate), len(waveform))
-            chunk = waveform[start:end]
-            result = pipe(chunk, generate_kwargs={"language": "zh", "task": "transcribe"})
-            transcript_parts.append(result["text"])
-            if progress_callback:
-                progress_callback(
-                    0.25 + (0.75 * ((index + 1) / total_chunks)),
-                    f"Transcribing chunk {index + 1}/{total_chunks}",
-                )
-
-        transcript = "".join(part.strip() for part in transcript_parts if part)
+        transcript = str(parsed["transcript"]).strip()
         if not transcript:
             raise RuntimeError("ASR returned empty transcript")
 
-        return TranscriptResult(transcript=transcript, source=self.config.asr_model_name)
+        device = str(parsed.get("device", "")).strip() or None
+        print(
+            f"[asr] Completed with model {self.config.asr_model_name} on "
+            f"{device or 'unknown'} via env `{self.config.asr_conda_env or 'current'}`"
+        )
+
+        if progress_callback and device:
+            progress_callback(0.95, f"ASR completed on {device}")
+
+        return TranscriptResult(
+            transcript=transcript,
+            source=str(parsed.get("source", self.config.asr_model_name)),
+            language=str(parsed.get("language", "zh")),
+            device=device,
+        )
+
+    def _run_worker(self, payload: dict[str, object]) -> subprocess.CompletedProcess[str]:
+        command = self._build_worker_command()
+        try:
+            completed = subprocess.run(
+                command,
+                input=json.dumps(payload, ensure_ascii=False),
+                text=True,
+                capture_output=True,
+                check=False,
+                cwd=self.config.project_root,
+            )
+        except FileNotFoundError as exc:
+            if self.config.asr_conda_env.strip():
+                raise RuntimeError("conda is required to launch the ASR worker environment") from exc
+            raise RuntimeError("Python is required to launch the ASR worker") from exc
+
+        if completed.returncode != 0:
+            stderr = completed.stderr.strip() or "<empty>"
+            stdout = completed.stdout.strip() or "<empty>"
+            raise RuntimeError(
+                "ASR failed while running "
+                f"`{' '.join(command)}`. "
+                f"Configured env: {self.config.asr_conda_env or 'current'}. "
+                f"STDERR: {stderr}\nSTDOUT: {stdout}"
+            )
+        return completed
+
+    def _build_worker_command(self) -> list[str]:
+        worker_path = Path(__file__).with_name("asr_worker.py")
+        if self.config.asr_conda_env.strip():
+            return [
+                "conda",
+                "run",
+                "--no-capture-output",
+                "-n",
+                self.config.asr_conda_env,
+                "python",
+                str(worker_path),
+            ]
+        return [sys.executable, str(worker_path)]
 
     @staticmethod
     def _extract_audio(video_path: str, audio_path: Path) -> None:
