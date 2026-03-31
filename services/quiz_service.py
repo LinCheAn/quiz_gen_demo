@@ -54,15 +54,20 @@ class QuizService:
 
     def regenerate_options_only(
         self,
-        existing_questions: list[QuizQuestion],
+        existing_questions: list[QuizQuestion] | None,
         context_chunks: list[str],
+        question_stems: list[str] | None = None,
         variant: int = 1,
         progress_callback: ProgressCallback | None = None,
     ) -> QuizResult:
+        normalized_stems = self._resolve_question_stems(
+            existing_questions=existing_questions,
+            question_stems=question_stems,
+        )
         return self._generate_live(
             context_chunks=context_chunks,
             variant=variant,
-            options_only_for=existing_questions,
+            options_only_for=normalized_stems,
             progress_callback=progress_callback,
         )
 
@@ -70,7 +75,7 @@ class QuizService:
         self,
         context_chunks: list[str],
         variant: int,
-        options_only_for: list[QuizQuestion] | None,
+        options_only_for: list[str] | None,
         progress_callback: ProgressCallback | None = None,
     ) -> QuizResult:
         del variant
@@ -141,15 +146,15 @@ class QuizService:
         self,
         client: Any,
         references: str,
-        existing_questions: list[QuizQuestion],
+        question_stems: list[str],
         progress_callback: ProgressCallback | None = None,
     ) -> tuple[list[QuizQuestion], list[dict[str, Any]]]:
         prompt = self._build_full_quiz_prompt(references)
-        total_questions = len(existing_questions)
+        total_questions = len(question_stems)
         questions: list[QuizQuestion] = []
         raw_responses: list[dict[str, Any]] = []
 
-        for question_index, existing_question in enumerate(existing_questions, start=1):
+        for question_index, question_stem in enumerate(question_stems, start=1):
             if progress_callback:
                 progress = 0.15 + (0.65 * ((question_index - 1) / max(1, total_questions)))
                 progress_callback(
@@ -159,7 +164,7 @@ class QuizService:
             question, raw_response = self._generate_single_continuation_question(
                 client,
                 prompt,
-                existing_question.question,
+                question_stem,
                 question_index,
             )
             questions.append(question)
@@ -209,6 +214,30 @@ class QuizService:
             question_index=question_index,
             attempts=attempts,
         )
+
+    def _resolve_question_stems(
+        self,
+        *,
+        existing_questions: list[QuizQuestion] | None,
+        question_stems: list[str] | None,
+    ) -> list[str]:
+        normalized_custom_stems = [
+            collapse_whitespace(stem)
+            for stem in (question_stems or [])
+            if collapse_whitespace(stem)
+        ]
+        if normalized_custom_stems:
+            return normalized_custom_stems
+
+        normalized_existing_stems = [
+            collapse_whitespace(question.question)
+            for question in (existing_questions or [])
+            if collapse_whitespace(question.question)
+        ]
+        if normalized_existing_stems:
+            return normalized_existing_stems
+
+        raise ValueError("No question stems found. Generate a quiz first or provide custom questions.")
 
     def _generate_single_continuation_question(
         self,

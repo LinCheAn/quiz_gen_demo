@@ -6,6 +6,7 @@ from pathlib import Path
 
 from services.quiz_service import QuizService
 from utils.config import AppConfig
+from utils.schemas import QuizQuestion
 
 
 class QuizServiceTest(unittest.TestCase):
@@ -112,6 +113,36 @@ class QuizServiceTest(unittest.TestCase):
         )
 
         self.assertEqual(question.question, "Original stem")
+
+    def test_resolve_question_stems_prefers_custom_questions(self) -> None:
+        service = self._build_service()
+        stems = service._resolve_question_stems(
+            existing_questions=[
+                QuizQuestion(
+                    question="Existing stem",
+                    options={"A": "A", "B": "B", "C": "C", "D": "D"},
+                    answer="A",
+                )
+            ],
+            question_stems=["  Custom stem  ", "", "Second custom stem"],
+        )
+
+        self.assertEqual(stems, ["Custom stem", "Second custom stem"])
+
+    def test_resolve_question_stems_falls_back_to_existing_questions(self) -> None:
+        service = self._build_service()
+        stems = service._resolve_question_stems(
+            existing_questions=[
+                QuizQuestion(
+                    question="Existing stem",
+                    options={"A": "A", "B": "B", "C": "C", "D": "D"},
+                    answer="A",
+                )
+            ],
+            question_stems=None,
+        )
+
+        self.assertEqual(stems, ["Existing stem"])
 
 
 if __name__ == "__main__":
