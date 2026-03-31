@@ -8,6 +8,7 @@ from services.pipeline_service import PipelineService
 from utils.config import load_config
 from utils.server_manager import ModelServerManager
 from utils.schemas import PipelineParameters, PipelineRunState
+from utils.ui_helpers import append_custom_question, format_question_markdown, parse_custom_question_lines
 
 
 APP_CONFIG = load_config()
@@ -49,12 +50,7 @@ def format_quiz_markdown(state: PipelineRunState) -> str:
         return "尚未產生題目。"
     lines = [f"### Quiz Output v{state.quiz_generation_count}"]
     for index, question in enumerate(state.quiz_result.questions, start=1):
-        lines.append(f"**Q{index}. {question.question}**")
-        for option_key in ("A", "B", "C", "D"):
-            lines.append(f"- {option_key}. {question.options[option_key]}")
-        lines.append(f"Answer: `{question.answer}`")
-        if question.explanation:
-            lines.append(f"Explanation: {question.explanation}")
+        lines.append(format_question_markdown(question, index=index))
         lines.append("")
     return "\n".join(lines)
 
@@ -97,12 +93,11 @@ def _build_incremental_result_updates(
     state: PipelineRunState,
     *,
     reset_unfinished: bool,
-) -> tuple[Any, Any, Any, Any, Any, Any]:
+) -> tuple[Any, Any, Any, Any, Any]:
     transcript_output: Any = "" if reset_unfinished else gr.skip()
     keywords_output: Any = None if reset_unfinished else gr.skip()
     chunks_output: Any = None if reset_unfinished else gr.skip()
     retrieval_output: Any = None if reset_unfinished else gr.skip()
-    quiz_markdown_output: Any = DEFAULT_QUIZ_MARKDOWN if reset_unfinished else gr.skip()
     quiz_json_output: Any = None if reset_unfinished else gr.skip()
 
     if state.steps["asr"].status in {"completed", "skipped"} and state.transcript:
@@ -118,7 +113,6 @@ def _build_incremental_result_updates(
         retrieval_output = format_retrieval(state)
 
     if state.steps["quiz"].status == "completed" and state.quiz_result:
-        quiz_markdown_output = format_quiz_markdown(state)
         quiz_json_output = state.quiz_result.model_dump(mode="json")
 
     return (
@@ -126,7 +120,6 @@ def _build_incremental_result_updates(
         keywords_output,
         chunks_output,
         retrieval_output,
-        quiz_markdown_output,
         quiz_json_output,
     )
 
@@ -141,7 +134,6 @@ def render_pipeline_outputs(
         keywords_output,
         chunks_output,
         retrieval_output,
-        quiz_markdown_output,
         quiz_json_output,
     ) = _build_incremental_result_updates(state, reset_unfinished=reset_unfinished)
 
@@ -153,17 +145,14 @@ def render_pipeline_outputs(
         keywords_output,
         chunks_output,
         retrieval_output,
-        quiz_markdown_output,
         quiz_json_output,
     )
 
 
 def render_regeneration_outputs(state: PipelineRunState) -> tuple:
-    quiz_markdown_output: Any = gr.skip()
     quiz_json_output: Any = gr.skip()
 
     if state.steps["quiz"].status == "completed" and state.quiz_result:
-        quiz_markdown_output = format_quiz_markdown(state)
         quiz_json_output = state.quiz_result.model_dump(mode="json")
 
     return (
@@ -174,7 +163,6 @@ def render_regeneration_outputs(state: PipelineRunState) -> tuple:
         gr.skip(),
         gr.skip(),
         gr.skip(),
-        quiz_markdown_output,
         quiz_json_output,
     )
 
@@ -226,6 +214,7 @@ def run_pipeline_ui(
 
 def regenerate_ui(
     state_payload: dict | None,
+    custom_question_text: str,
     *,
     options_only: bool,
     progress: gr.Progress = gr.Progress(track_tqdm=False),
@@ -238,9 +227,12 @@ def regenerate_ui(
     def progress_callback(value: float, desc: str) -> None:
         progress(value, desc=desc)
 
+    custom_questions = parse_custom_question_lines(custom_question_text) if options_only else None
+
     for state in service.stream_regenerate_quiz(
         run_state_payload=state_payload,
         options_only=options_only,
+        custom_questions=custom_questions,
         progress_callback=progress_callback,
     ):
         yield render_regeneration_outputs(state)
@@ -248,16 +240,28 @@ def regenerate_ui(
 
 def regenerate_quiz_ui(
     state_payload: dict | None,
+    custom_question_text: str,
     progress: gr.Progress = gr.Progress(track_tqdm=False),
 ):
-    yield from regenerate_ui(state_payload, options_only=False, progress=progress)
+    yield from regenerate_ui(
+        state_payload,
+        custom_question_text,
+        options_only=False,
+        progress=progress,
+    )
 
 
 def regenerate_options_only_ui(
     state_payload: dict | None,
+    custom_question_text: str,
     progress: gr.Progress = gr.Progress(track_tqdm=False),
 ):
-    yield from regenerate_ui(state_payload, options_only=True, progress=progress)
+    yield from regenerate_ui(
+        state_payload,
+        custom_question_text,
+        options_only=True,
+        progress=progress,
+    )
 
 
 def build_demo() -> gr.Blocks:
@@ -327,15 +331,43 @@ def build_demo() -> gr.Blocks:
         with gr.Row():
             regenerate_button = gr.Button("Regenerate Quiz")
             regenerate_options_button = gr.Button("Regenerate Options Only")
+        custom_question_input = gr.Textbox(
+            label="Custom Questions for Options-Only Regeneration",
+            lines=4,
+            placeholder="一行一題。若有填寫，Regenerate Options Only 會使用這些題幹續寫選項與答案。",
+        )
 
-        gr.Markdown("## Intermediate Results")
-        transcript_output = gr.Textbox(label="Transcript", lines=10)
-        keywords_output = gr.JSON(label="Extracted Keywords")
-        chunks_output = gr.JSON(label="Chunks")
-        retrieval_output = gr.JSON(label="Retrieved Relevant Chunks")
+        with gr.Accordion("Intermediate Results", open=False):
+            transcript_output = gr.Textbox(label="Transcript", lines=10)
+            keywords_output = gr.JSON(label="Extracted Keywords")
+            chunks_output = gr.JSON(label="Chunks")
+            retrieval_output = gr.JSON(label="Retrieved Relevant Chunks")
 
         gr.Markdown("## Final Output")
-        quiz_markdown = gr.Markdown(DEFAULT_QUIZ_MARKDOWN)
+        @gr.render(inputs=[state_store])
+        def render_quiz_output(state_payload: dict | None):
+            if not state_payload:
+                gr.Markdown(DEFAULT_QUIZ_MARKDOWN)
+                return
+
+            state = PipelineRunState.model_validate(state_payload)
+            if not state.quiz_result or not state.quiz_result.questions:
+                gr.Markdown(DEFAULT_QUIZ_MARKDOWN)
+                return
+
+            gr.Markdown(f"### Quiz Output v{state.quiz_generation_count}")
+            for index, question in enumerate(state.quiz_result.questions, start=1):
+                with gr.Row():
+                    with gr.Column(scale=6):
+                        gr.Markdown(format_question_markdown(question, index=index))
+                    with gr.Column(scale=1, min_width=180):
+                        copy_button = gr.Button("帶入自訂題目")
+                        copy_button.click(
+                            fn=lambda existing_text, stem=question.question: append_custom_question(existing_text, stem),
+                            inputs=[custom_question_input],
+                            outputs=[custom_question_input],
+                            show_progress="hidden",
+                        )
         quiz_json = gr.JSON(label="Quiz JSON")
 
         output_components = [
@@ -346,7 +378,6 @@ def build_demo() -> gr.Blocks:
             keywords_output,
             chunks_output,
             retrieval_output,
-            quiz_markdown,
             quiz_json,
         ]
 
@@ -368,14 +399,14 @@ def build_demo() -> gr.Blocks:
 
         regenerate_button.click(
             fn=regenerate_quiz_ui,
-            inputs=[state_store],
+            inputs=[state_store, custom_question_input],
             outputs=output_components,
             show_progress="minimal",
         )
 
         regenerate_options_button.click(
             fn=regenerate_options_only_ui,
-            inputs=[state_store],
+            inputs=[state_store, custom_question_input],
             outputs=output_components,
             show_progress="minimal",
         )

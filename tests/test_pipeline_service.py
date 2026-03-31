@@ -67,6 +67,10 @@ class FakeEmbeddingService:
 
 
 class FakeQuizService:
+    def __init__(self) -> None:
+        self.last_existing_questions = None
+        self.last_question_stems = None
+
     def generate_quiz(self, context_chunks, variant: int = 0, progress_callback=None) -> QuizResult:
         return QuizResult(
             questions=[
@@ -81,7 +85,34 @@ class FakeQuizService:
             generation_mode="full",
         )
 
-    def regenerate_options_only(self, existing_questions, context_chunks, variant: int = 1, progress_callback=None) -> QuizResult:
+    def regenerate_options_only(
+        self,
+        existing_questions=None,
+        context_chunks=None,
+        question_stems=None,
+        variant: int = 1,
+        progress_callback=None,
+    ) -> QuizResult:
+        self.last_existing_questions = existing_questions
+        self.last_question_stems = question_stems
+        stems = question_stems or [
+            question.question
+            for question in (existing_questions or [])
+        ]
+        if stems:
+            return QuizResult(
+                questions=[
+                    QuizQuestion(
+                        question=stem,
+                        options={"A": "A", "B": "B", "C": "C", "D": "D"},
+                        answer="A",
+                        explanation="Because.",
+                    )
+                    for stem in stems
+                ],
+                model="fake-quiz",
+                generation_mode="options_only",
+            )
         return self.generate_quiz(context_chunks, variant=variant, progress_callback=progress_callback)
 
     def regenerate_full(self, context_chunks, variant: int = 1, progress_callback=None) -> QuizResult:
@@ -89,13 +120,17 @@ class FakeQuizService:
 
 
 class SequentialPipelineService(PipelineService):
+    def __init__(self, config, server_manager=None) -> None:
+        super().__init__(config, server_manager)
+        self.fake_quiz_service = FakeQuizService()
+
     def _build_services(self, mode: str):
         return {
             "asr": None,
             "summary": FakeSummaryService(),
             "chunk": FakeChunkService(),
             "embedding": FakeEmbeddingService(),
-            "quiz": FakeQuizService(),
+            "quiz": self.fake_quiz_service,
         }
 
 
@@ -163,6 +198,89 @@ class PipelineServiceTest(unittest.TestCase):
             regenerated_questions = [question.question for question in regenerated_state.quiz_result.questions]
             self.assertEqual(original_questions, regenerated_questions)
             self.assertEqual(regenerated_state.quiz_generation_count, 2)
+
+    def test_options_regeneration_can_use_custom_questions(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            config = AppConfig(project_root=Path(tempdir))
+            config.ensure_directories()
+            service = SequentialPipelineService(config)
+            parameters = PipelineParameters(n_keywords=4, top_k=3, chunk_size=80, chunk_overlap=10)
+
+            states = list(
+                service.stream_pipeline(
+                    mode="live",
+                    parameters=parameters,
+                    video_path=None,
+                    transcript_text=(
+                        "Binary search trees support efficient search and insertion. "
+                        "Balancing affects time complexity. Traversal order changes the output sequence."
+                    ),
+                    subtitle_path=None,
+                )
+            )
+            final_state = states[-1]
+
+            regenerated_states = list(
+                service.stream_regenerate_quiz(
+                    run_state_payload=final_state.model_dump(mode="json"),
+                    options_only=True,
+                    custom_questions=[
+                        "How does balancing affect a binary search tree?",
+                        "Why does traversal order matter?",
+                    ],
+                )
+            )
+            regenerated_state = regenerated_states[-1]
+
+            self.assertEqual(
+                [question.question for question in regenerated_state.quiz_result.questions],
+                [
+                    "How does balancing affect a binary search tree?",
+                    "Why does traversal order matter?",
+                ],
+            )
+            self.assertEqual(
+                service.fake_quiz_service.last_question_stems,
+                [
+                    "How does balancing affect a binary search tree?",
+                    "Why does traversal order matter?",
+                ],
+            )
+
+    def test_options_regeneration_accepts_custom_questions_without_existing_quiz(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            config = AppConfig(project_root=Path(tempdir))
+            config.ensure_directories()
+            service = SequentialPipelineService(config)
+            state = service._create_state(
+                run_id="run_custom_only",
+                mode="live",
+                parameters=PipelineParameters(),
+            )
+            state.retrieved_chunks = [
+                RetrievedChunk(
+                    rank=1,
+                    chunk_id="chunk_001",
+                    text="tree search concept",
+                    score=0.9,
+                    matched_keywords=["tree"],
+                )
+            ]
+
+            regenerated_states = list(
+                service.stream_regenerate_quiz(
+                    run_state_payload=state.model_dump(mode="json"),
+                    options_only=True,
+                    custom_questions=["What is a tree search concept?"],
+                )
+            )
+            regenerated_state = regenerated_states[-1]
+
+            self.assertEqual(regenerated_state.steps["quiz"].status, "completed")
+            self.assertEqual(
+                [question.question for question in regenerated_state.quiz_result.questions],
+                ["What is a tree search concept?"],
+            )
 
     def test_mock_mode_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:

@@ -221,6 +221,7 @@ class PipelineService:
         *,
         run_state_payload: dict,
         options_only: bool,
+        custom_questions: list[str] | None = None,
         progress_callback: ProgressCallback | None = None,
     ) -> Iterator[PipelineRunState]:
         state = PipelineRunState.model_validate(run_state_payload)
@@ -228,11 +229,12 @@ class PipelineService:
         storage = RunArtifactManager(self.config, state.run_id)
         services = self._build_services(state.mode)
         context_chunks = [item.text for item in state.retrieved_chunks]
+        custom_question_stems = [question.strip() for question in (custom_questions or []) if question.strip()]
         if not context_chunks:
             raise ValueError("No retrieved chunks found. Run the pipeline first.")
 
-        if options_only and not state.quiz_result:
-            raise ValueError("No existing quiz found. Generate a quiz first.")
+        if options_only and not state.quiz_result and not custom_question_stems:
+            raise ValueError("No existing quiz found. Generate a quiz first or provide custom questions.")
 
         self._set_step(
             state,
@@ -245,9 +247,11 @@ class PipelineService:
         try:
             self._prepare_server_for_step(state.mode, "quiz")
             if options_only:
+                existing_questions = state.quiz_result.questions if state.quiz_result else None
                 quiz_result = services["quiz"].regenerate_options_only(
-                    state.quiz_result.questions,
-                    context_chunks,
+                    existing_questions=existing_questions,
+                    context_chunks=context_chunks,
+                    question_stems=custom_question_stems or None,
                     variant=state.quiz_generation_count + 1,
                     progress_callback=self._step_progress(progress_callback, "quiz"),
                 )
