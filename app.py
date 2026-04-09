@@ -85,7 +85,10 @@ def format_status_rows(state: PipelineRunState):
 
 
 def format_keywords(state: PipelineRunState) -> dict[str, Any]:
-    return {"auto_keywords": state.keywords}
+    payload: dict[str, Any] = {"auto_keywords": state.keywords}
+    if state.summary_warning:
+        payload["warning"] = state.summary_warning
+    return payload
 
 
 def format_chunks(state: PipelineRunState) -> list[dict[str, Any]]:
@@ -128,6 +131,7 @@ def format_run_info(state: PipelineRunState) -> dict[str, Any]:
         "asr_conda_env": APP_CONFIG.asr_conda_env,
         "summary_model_name": model_selection.summary.model_name,
         "summary_base_url": model_selection.summary.base_url,
+        "summary_warning": state.summary_warning,
         "embedding_model_name": APP_CONFIG.embedding_model_name,
         "embedding_conda_env": APP_CONFIG.embedding_conda_env,
         "quiz_model_id": model_selection.quiz.id,

@@ -42,6 +42,15 @@ class FakeSummaryService:
         return KeywordResult(keywords=["tree", "search"], model="fake-summary")
 
 
+class FakeSummaryServiceWithWarning:
+    def extract_keywords(self, text: str, n_keywords: int, progress_callback=None) -> KeywordResult:
+        return KeywordResult(
+            keywords=["tree", "search"],
+            model="fake-summary",
+            warning="摘要輸入內容超過 summary model 的 max_model_len，已自動 cutoff。",
+        )
+
+
 class FakeChunkService:
     def chunk_text(self, text: str, chunk_size: int, overlap: int) -> ChunkResult:
         return ChunkResult(
@@ -168,6 +177,17 @@ class FailingSummaryPipelineService(PipelineService):
         return {
             "asr": None,
             "summary": FailingSummaryService(),
+            "chunk": FakeChunkService(),
+            "embedding": FakeEmbeddingService(),
+            "quiz": FakeQuizService(),
+        }
+
+
+class WarningSummaryPipelineService(PipelineService):
+    def _build_services(self, mode: str):
+        return {
+            "asr": None,
+            "summary": FakeSummaryServiceWithWarning(),
             "chunk": FakeChunkService(),
             "embedding": FakeEmbeddingService(),
             "quiz": FakeQuizService(),
@@ -406,6 +426,29 @@ class PipelineServiceTest(unittest.TestCase):
             )
 
             self.assertEqual(service.fake_embedding_service.last_keywords, ["tree", "search"])
+
+    def test_summary_cutoff_warning_is_persisted_in_pipeline_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            config = AppConfig(project_root=Path(tempdir))
+            config.ensure_directories()
+            service = WarningSummaryPipelineService(config)
+            parameters = PipelineParameters(n_keywords=4, top_k=3, chunk_size=80, chunk_overlap=10)
+
+            final_state = list(
+                service.stream_pipeline(
+                    mode="live",
+                    parameters=parameters,
+                    video_path=None,
+                    transcript_text="Very long subtitle text.",
+                    subtitle_path=None,
+                )
+            )[-1]
+
+            self.assertEqual(
+                final_state.summary_warning,
+                "摘要輸入內容超過 summary model 的 max_model_len，已自動 cutoff。",
+            )
+            self.assertIn("已自動 cutoff", final_state.steps["summary"].message)
 
     def test_options_regeneration_accepts_custom_questions_without_existing_quiz(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:

@@ -142,6 +142,14 @@ class AppRenderingTest(unittest.TestCase):
 
         self.assertEqual(outputs[8], [state.retrieved_chunks[0].model_dump(mode="json")])
 
+    def test_format_keywords_includes_summary_warning(self) -> None:
+        state = make_state()
+        state.summary_warning = "摘要輸入內容超過 summary model 的 max_model_len，已自動 cutoff。"
+
+        outputs = render_rag_outputs(state, reset_unfinished=False)
+
+        self.assertEqual(outputs[5]["warning"], state.summary_warning)
+
     def test_format_progress_html_marks_failed_step(self) -> None:
         state = make_state()
         state.steps["retrieval"].status = "failed"
@@ -171,6 +179,7 @@ class AppRenderingTest(unittest.TestCase):
         self.assertEqual(quiz_model["type"], "dropdown")
         self.assertEqual(summary_model["props"]["value"], APP_MODEL_REGISTRY.defaults.summary_model_id)
         self.assertEqual(quiz_model["props"]["value"], APP_MODEL_REGISTRY.defaults.quiz_model_id)
+        self.assertEqual(summary_model["props"]["choices"], quiz_model["props"]["choices"])
 
     def test_pipeline_status_tabs_are_present_in_order(self) -> None:
         config = self._build_demo_config()

@@ -20,8 +20,56 @@ class ModelRegistryTest(unittest.TestCase):
 
         self.assertEqual(runtime_config.summary_model_name, selection.summary.model_name)
         self.assertEqual(runtime_config.summary_server_model, selection.summary.server_model)
+        self.assertEqual(runtime_config.summary_model_path, selection.summary.lora_path)
         self.assertEqual(runtime_config.quiz_model_name, selection.quiz.model_name)
         self.assertEqual(runtime_config.quiz_model_path, selection.quiz.lora_path)
+
+    def test_registry_allows_model_without_lora_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            model_info_path = Path(tempdir) / "model_info.json"
+            model_info_path.write_text(
+                json.dumps(
+                    {
+                        "defaults": {
+                            "summary_model_id": "summary-a",
+                            "quiz_model_id": "quiz-base",
+                        },
+                        "models": [
+                            {
+                                "id": "summary-a",
+                                "label": "Summary A",
+                                "model_name": "summary-a",
+                                "base_url": "http://127.0.0.1:8001/v1",
+                                "server_conda_env": "vllm",
+                                "server_model": "summary-server",
+                                "gpu_memory_utilization": 0.8,
+                                "max_model_len": 4096,
+                                "tensor_parallel_size": 1,
+                            },
+                            {
+                                "id": "quiz-base",
+                                "label": "Quiz Base",
+                                "model_name": "quiz-base",
+                                "base_url": "http://127.0.0.1:8000/v1",
+                                "server_conda_env": "vllm",
+                                "server_model": "quiz-server",
+                                "gpu_memory_utilization": 0.7,
+                                "max_model_len": 4096,
+                                "tensor_parallel_size": 1,
+                                "dtype": "bfloat16",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            registry = ModelRegistry.load(model_info_path)
+            selection = registry.resolve_selection()
+            runtime_config = build_runtime_config(AppConfig(project_root=Path(tempdir)), selection)
+
+            self.assertIsNone(selection.quiz.lora_path)
+            self.assertIsNone(runtime_config.quiz_model_path)
 
     def test_missing_default_model_raises_clear_error(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -33,8 +81,7 @@ class ModelRegistryTest(unittest.TestCase):
                             "summary_model_id": "missing-summary",
                             "quiz_model_id": "quiz-a",
                         },
-                        "summary_models": [],
-                        "quiz_models": [
+                        "models": [
                             {
                                 "id": "quiz-a",
                                 "label": "Quiz A",
@@ -56,6 +103,12 @@ class ModelRegistryTest(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "Default summary model"):
                 ModelRegistry.load(model_info_path)
+
+    def test_summary_and_quiz_choices_share_same_model_pool(self) -> None:
+        registry = ModelRegistry.load(Path(__file__).resolve().parents[1] / "model_info.json")
+
+        self.assertEqual(registry.summary_choices(), registry.quiz_choices())
+        self.assertEqual(registry.summary_choices(), registry.model_choices())
 
 
 if __name__ == "__main__":

@@ -35,13 +35,14 @@ class PipelineParameters(BaseModel):
     quiz_variant_count: int = 1
 
 
-class SummaryModelPreset(BaseModel):
+class ModelPreset(BaseModel):
     id: str
     label: str
     model_name: str
     base_url: str
     server_conda_env: str
     server_model: str
+    lora_path: str | None = None
     gpu_memory_utilization: float
     max_model_len: int
     tensor_parallel_size: int
@@ -49,23 +50,13 @@ class SummaryModelPreset(BaseModel):
     quantization: str | None = None
 
 
-class QuizModelPreset(BaseModel):
-    id: str
-    label: str
-    model_name: str
-    base_url: str
-    server_conda_env: str
-    server_model: str
-    lora_path: str
-    gpu_memory_utilization: float
-    max_model_len: int
-    tensor_parallel_size: int
-    dtype: str | None = None
-
-
 class ModelSelectionSnapshot(BaseModel):
-    summary: SummaryModelPreset
-    quiz: QuizModelPreset
+    summary: ModelPreset
+    quiz: ModelPreset
+
+
+SummaryModelPreset = ModelPreset
+QuizModelPreset = ModelPreset
 
 
 class TranscriptResult(BaseModel):
@@ -79,6 +70,7 @@ class TranscriptResult(BaseModel):
 class KeywordResult(BaseModel):
     keywords: list[str]
     model: str
+    warning: str | None = None
     artifact_path: str | None = None
 
 
@@ -137,6 +129,7 @@ class PipelineRunState(BaseModel):
     selected_models: ModelSelectionSnapshot | None = None
     steps: dict[str, StepStatus]
     transcript: str = ""
+    summary_warning: str | None = None
     keywords: list[str] = Field(default_factory=list)
     chunks: list[TextChunk] = Field(default_factory=list)
     retrieved_chunks: list[RetrievedChunk] = Field(default_factory=list)

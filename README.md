@@ -162,13 +162,14 @@ AUTO_START_MODEL_SERVERS=0 conda run -n demo python app.py
 
 - `defaults.summary_model_id`
 - `defaults.quiz_model_id`
-- `summary_models[]`
-- `quiz_models[]`
+- `models[]`
 
 其中：
 
-- `summary_models[]` 需要提供 model id、label、API `base_url`、對應的 served `model_name`，以及啟動 summary server 所需的 conda env / base model / vLLM 參數。
-- `quiz_models[]` 除了上述欄位外，還需要提供 `lora_path`，讓 quiz server 能用該 adapter 啟動。
+- `models[]` 是共用 model pool，`Summary Model` 與 `Quiz Model` 兩個 dropdown 都從這裡選。
+- 每個 model preset 需要提供 model id、label、API `base_url`、對應的 served `model_name`，以及啟動 vLLM server 所需的 conda env / base model / vLLM 參數。
+- 可額外提供 `lora_path`。有提供時會以 LoRA adapter 啟動；省略時則直接以 `server_model` 當作 base model 啟動。
+- 若 summary 選 base model、quiz 選同一個 base model 上的 LoRA alias，server manager 會盡量共用同一個 vLLM process，避免在兩個 step 之間重新 loading。
 
 如果你要新增可選模型，優先改這個檔案，而不是直接改 `app.py`。
 

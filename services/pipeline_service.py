@@ -136,13 +136,17 @@ class PipelineService:
                 parameters.n_keywords,
                 progress_callback=self._step_progress(progress_callback, "summary"),
             )
+            state.summary_warning = keyword_result.warning
             state.keywords = keyword_result.keywords
             keyword_artifact = storage.save_json("outputs/keywords.json", keyword_result.model_dump(mode="json"))
+            summary_message = f"Extracted {len(state.keywords)} keywords"
+            if keyword_result.warning:
+                summary_message = f"{summary_message}. {keyword_result.warning}"
             self._set_step(
                 state,
                 "summary",
                 "completed",
-                f"Extracted {len(state.keywords)} keywords",
+                summary_message,
                 artifact_path=keyword_artifact,
             )
             yield self._persist_and_copy(state, storage)
