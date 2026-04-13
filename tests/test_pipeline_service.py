@@ -38,8 +38,13 @@ class FakeServerManager:
 
 
 class FakeSummaryService:
+    def __init__(self) -> None:
+        self.call_count = 0
+        self.keywords = ["tree", "search"]
+
     def extract_keywords(self, text: str, n_keywords: int, progress_callback=None) -> KeywordResult:
-        return KeywordResult(keywords=["tree", "search"], model="fake-summary")
+        self.call_count += 1
+        return KeywordResult(keywords=list(self.keywords), model="fake-summary")
 
 
 class FakeSummaryServiceWithWarning:
@@ -52,7 +57,11 @@ class FakeSummaryServiceWithWarning:
 
 
 class FakeChunkService:
+    def __init__(self) -> None:
+        self.call_count = 0
+
     def chunk_text(self, text: str, chunk_size: int, overlap: int) -> ChunkResult:
+        self.call_count += 1
         return ChunkResult(
             chunks=[TextChunk(chunk_id="chunk_001", text="tree search concept", start_char=0, end_char=18)],
             strategy="fixed_window_char",
@@ -149,14 +158,16 @@ class FakeQuizService:
 class SequentialPipelineService(PipelineService):
     def __init__(self, config, server_manager=None, selected_models=None) -> None:
         super().__init__(config, server_manager, selected_models)
+        self.fake_summary_service = FakeSummaryService()
+        self.fake_chunk_service = FakeChunkService()
         self.fake_embedding_service = FakeEmbeddingService()
         self.fake_quiz_service = FakeQuizService()
 
     def _build_services(self, mode: str):
         return {
             "asr": None,
-            "summary": FakeSummaryService(),
-            "chunk": FakeChunkService(),
+            "summary": self.fake_summary_service,
+            "chunk": self.fake_chunk_service,
             "embedding": self.fake_embedding_service,
             "quiz": self.fake_quiz_service,
         }
@@ -426,6 +437,44 @@ class PipelineServiceTest(unittest.TestCase):
             )
 
             self.assertEqual(service.fake_embedding_service.last_keywords, ["tree", "search"])
+
+    def test_keyword_regeneration_updates_keywords_and_clears_downstream_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            config = AppConfig(project_root=Path(tempdir))
+            config.ensure_directories()
+            service = SequentialPipelineService(config)
+            parameters = PipelineParameters(n_keywords=4, top_k=3, chunk_size=80, chunk_overlap=10)
+
+            final_state = list(
+                service.stream_pipeline(
+                    mode="live",
+                    parameters=parameters,
+                    video_path=None,
+                    transcript_text="Binary search tree example.",
+                    subtitle_path=None,
+                )
+            )[-1]
+
+            initial_chunk_calls = service.fake_chunk_service.call_count
+            service.fake_summary_service.keywords = ["heap", "balance"]
+
+            regenerated_states = list(
+                service.stream_regenerate_keywords(
+                    run_state_payload=final_state.model_dump(mode="json"),
+                )
+            )
+            regenerated_state = regenerated_states[-1]
+
+            self.assertEqual(service.fake_summary_service.call_count, 2)
+            self.assertEqual(service.fake_chunk_service.call_count, initial_chunk_calls)
+            self.assertEqual(regenerated_states[0].steps["summary"].status, "running")
+            self.assertEqual(regenerated_state.keywords, ["heap", "balance"])
+            self.assertEqual(regenerated_state.steps["summary"].status, "completed")
+            self.assertEqual(regenerated_state.steps["retrieval"].status, "pending")
+            self.assertEqual(regenerated_state.steps["quiz"].status, "pending")
+            self.assertEqual(regenerated_state.retrieved_chunks, [])
+            self.assertIsNone(regenerated_state.quiz_result)
+            self.assertEqual(regenerated_state.quiz_results, [])
 
     def test_summary_cutoff_warning_is_persisted_in_pipeline_state(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:

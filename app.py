@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import socket
 from typing import Any
 
@@ -435,6 +436,21 @@ def run_rag_ui(
         is_first_yield = False
 
 
+def regenerate_keywords_ui(state_payload: dict | None):
+    if not state_payload:
+        raise gr.Error("請先執行 Run Pipeline。")
+
+    state = PipelineRunState.model_validate(state_payload)
+    service = build_service_for_selection(resolve_state_model_selection(state))
+
+    is_first_yield = True
+    for state in service.stream_regenerate_keywords(
+        run_state_payload=state_payload,
+    ):
+        yield render_rag_outputs(state, reset_unfinished=is_first_yield)
+        is_first_yield = False
+
+
 def regenerate_quiz_ui(
     state_payload: dict | None,
     custom_question_text: str,
@@ -471,12 +487,11 @@ def build_demo() -> gr.Blocks:
         )
         gr.Markdown(
             f"""
-            此 UI 僅支援 `live` 模式，任何模型錯誤都會直接在對應 step 失敗，不會回退到 mock 或本地替代輸出。
             `AUTO_START_MODEL_SERVERS={int(config.auto_start_model_servers)}`，
             啟動策略為 `{config.model_server_start_strategy}`，
-            ASR 會在 conda env `{config.asr_conda_env or 'current'}` 執行，
-            embedding 會在 conda env `{config.embedding_conda_env}` 執行。
-            模型選單來源為 `{config.model_info_path}`。
+            ASR stage 在 conda env `{config.asr_conda_env or 'current'}` 執行，
+            embedding stage 在 conda env `{config.embedding_conda_env}` 執行。
+            模型選單路徑 `{config.model_info_path}`。
             """
         )
 
@@ -574,7 +589,9 @@ def build_demo() -> gr.Blocks:
                 placeholder="可用逗號或換行分隔。留空則使用自動關鍵字。",
             )
             current_keywords_output = gr.JSON(label="Current Auto Keywords")
-            run_rag_button = gr.Button("進行RAG", variant="secondary")
+            with gr.Row():
+                regenerate_keywords_button = gr.Button("重新生成 Keyword", variant="secondary")
+                run_rag_button = gr.Button("進行RAG", variant="secondary")
 
         gr.Markdown("## Final Output")
 
@@ -654,6 +671,13 @@ def build_demo() -> gr.Blocks:
             show_progress="hidden",
         )
 
+        regenerate_keywords_button.click(
+            fn=regenerate_keywords_ui,
+            inputs=[state_store],
+            outputs=output_components,
+            show_progress="hidden",
+        )
+
         regenerate_button.click(
             fn=regenerate_quiz_ui,
             inputs=[state_store, custom_question_input],
@@ -686,8 +710,21 @@ def find_available_port(host: str, start_port: int, max_attempts: int = 20) -> i
     )
 
 
+def parse_runtime_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--port",
+        type=int,
+        help="Port for the Gradio app. Overrides APP_PORT when provided.",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    config = APP_CONFIG
+    runtime_args = parse_runtime_args()
+    config = APP_CONFIG.copy_with_overrides(
+        app_port=runtime_args.port if runtime_args.port is not None else APP_CONFIG.app_port
+    )
     if config.auto_start_model_servers and config.model_server_start_strategy == "preload":
         default_selection = APP_MODEL_REGISTRY.resolve_selection()
         preload_config = build_runtime_config(config, default_selection)

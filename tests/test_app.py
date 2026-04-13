@@ -205,6 +205,7 @@ class AppRenderingTest(unittest.TestCase):
         intermediate_results = self._find_component(config, "Intermediate Results")
         custom_keywords = self._find_component(config, "Custom Keywords for RAG")
         current_auto_keywords = self._find_component(config, "Current Auto Keywords")
+        regenerate_keywords_button = self._find_component(config, "重新生成 Keyword")
         run_rag_button = self._find_component(config, "進行RAG")
         extracted_keywords = self._find_component(config, "Extracted Keywords")
         parents = self._layout_parents(config)
@@ -213,17 +214,23 @@ class AppRenderingTest(unittest.TestCase):
 
         self.assertNotIn(intermediate_results_id, self._ancestor_ids(config, custom_keywords["id"]))
         self.assertNotIn(intermediate_results_id, self._ancestor_ids(config, current_auto_keywords["id"]))
+        self.assertNotIn(intermediate_results_id, self._ancestor_ids(config, regenerate_keywords_button["id"]))
         self.assertNotIn(intermediate_results_id, self._ancestor_ids(config, run_rag_button["id"]))
         self.assertIn(intermediate_results_id, self._ancestor_ids(config, extracted_keywords["id"]))
 
         rag_container_id = parents[current_auto_keywords["id"]]
         self.assertIsNotNone(rag_container_id)
         child_ids = self._child_ids(config, rag_container_id)
+        button_row_id = parents[run_rag_button["id"]]
         self.assertEqual(
             child_ids,
-            [parents[custom_keywords["id"]], current_auto_keywords["id"], run_rag_button["id"]],
+            [parents[custom_keywords["id"]], current_auto_keywords["id"], button_row_id],
         )
         self.assertEqual(self._child_ids(config, parents[custom_keywords["id"]]), [custom_keywords["id"]])
+        self.assertEqual(
+            self._child_ids(config, button_row_id),
+            [regenerate_keywords_button["id"], run_rag_button["id"]],
+        )
 
     def test_regenerate_buttons_are_below_custom_question_input(self) -> None:
         config = self._build_demo_config()

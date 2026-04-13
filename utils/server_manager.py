@@ -7,6 +7,7 @@ import signal
 import subprocess
 import time
 from dataclasses import dataclass
+from hashlib import sha1
 from io import TextIOWrapper
 from pathlib import Path
 from shutil import which
@@ -46,6 +47,18 @@ class ManagedServerSpec:
     command: list[str]
     log_path: Path
     roles: frozenset[str]
+
+
+@dataclass(frozen=True)
+class ManagedProcessMetadata:
+    process_key: str
+    pid: int
+    base_url: str
+    expected_models: tuple[str, ...]
+    roles: frozenset[str]
+    command: tuple[str, ...]
+    log_path: Path
+    metadata_path: Path
 
 
 class ModelServerManager:
@@ -111,7 +124,9 @@ class ModelServerManager:
     def _release_process(self, process_key: str) -> None:
         process = self._started_processes.pop(process_key, None)
         log_handle = self._log_handles.pop(process_key, None)
+        metadata_path = self._metadata_path_for_process_key(process_key)
         if process is None:
+            metadata_path.unlink(missing_ok=True)
             if log_handle is not None:
                 log_handle.close()
             return
@@ -132,6 +147,7 @@ class ModelServerManager:
                     pass
                 except PermissionError:
                     process.kill()
+        metadata_path.unlink(missing_ok=True)
         if log_handle is not None:
             log_handle.close()
 
@@ -146,12 +162,18 @@ class ModelServerManager:
             print(f"[{spec.name}] Reusing existing endpoint {spec.base_url} with models {expected_models}.")
             return
         if details.get("reachable"):
-            available = ", ".join(details.get("models", [])) or "none"
-            raise RuntimeError(
-                f"[{spec.name}] Endpoint {spec.base_url} is already reachable but does not expose the expected "
-                f"models `{expected_models}`. Available models: {available}. "
-                "Change the configured port/model or stop the conflicting server."
-            )
+            if self._try_release_managed_conflicting_server(spec):
+                ready, details = self._probe_endpoint(spec.base_url, spec.expected_models)
+                if ready:
+                    print(f"[{spec.name}] Reusing existing endpoint {spec.base_url} with models {expected_models}.")
+                    return
+            if details.get("reachable"):
+                available = ", ".join(details.get("models", [])) or "none"
+                raise RuntimeError(
+                    f"[{spec.name}] Endpoint {spec.base_url} is already reachable but does not expose the expected "
+                    f"models `{expected_models}`. Available models: {available}. "
+                    "Change the configured port/model or stop the conflicting server."
+                )
 
         self._assert_cuda_available(spec.conda_env, spec.name)
         print(f"[{spec.name}] Starting model server on {spec.base_url}")
@@ -167,6 +189,7 @@ class ModelServerManager:
         )
         self._started_processes[spec.key] = process
         self._log_handles[spec.key] = log_file
+        self._write_managed_process_metadata(spec, process.pid)
 
         timeout_at = time.time() + self.config.model_server_startup_timeout_s
         while time.time() < timeout_at:
@@ -425,6 +448,113 @@ class ModelServerManager:
 
     def _build_quiz_spec(self) -> ManagedServerSpec:
         return self._process_specs[self._role_to_process_key["quiz"]]
+
+    def _try_release_managed_conflicting_server(self, spec: ManagedServerSpec) -> bool:
+        metadata = self._find_managed_process_for_base_url(spec.base_url)
+        if metadata is None:
+            return False
+        self._release_external_managed_process(metadata)
+        return True
+
+    def _release_external_managed_process(self, metadata: ManagedProcessMetadata) -> None:
+        try:
+            os.killpg(metadata.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        except PermissionError:
+            try:
+                os.kill(metadata.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        timeout_at = time.time() + 15
+        while time.time() < timeout_at:
+            if not Path(f"/proc/{metadata.pid}/cmdline").exists():
+                break
+            time.sleep(0.2)
+        metadata.metadata_path.unlink(missing_ok=True)
+
+    def _find_managed_process_for_base_url(self, base_url: str) -> ManagedProcessMetadata | None:
+        for metadata_path in sorted(self.logs_dir.glob("managed_server_*.json")):
+            metadata = self._load_managed_process_metadata(metadata_path)
+            if metadata is None:
+                continue
+            if metadata.base_url == base_url:
+                return metadata
+        return None
+
+    def _load_managed_process_metadata(self, metadata_path: Path) -> ManagedProcessMetadata | None:
+        try:
+            payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, TypeError, ValueError):
+            metadata_path.unlink(missing_ok=True)
+            return None
+
+        try:
+            metadata = ManagedProcessMetadata(
+                process_key=str(payload["process_key"]),
+                pid=int(payload["pid"]),
+                base_url=str(payload["base_url"]),
+                expected_models=tuple(str(item) for item in payload.get("expected_models", [])),
+                roles=frozenset(str(item) for item in payload.get("roles", [])),
+                command=tuple(str(item) for item in payload.get("command", [])),
+                log_path=Path(str(payload["log_path"])),
+                metadata_path=metadata_path,
+            )
+        except (KeyError, TypeError, ValueError):
+            metadata_path.unlink(missing_ok=True)
+            return None
+
+        if not self._pid_matches_metadata(metadata):
+            metadata_path.unlink(missing_ok=True)
+            return None
+        return metadata
+
+    def _pid_matches_metadata(self, metadata: ManagedProcessMetadata) -> bool:
+        proc_cmdline = Path(f"/proc/{metadata.pid}/cmdline")
+        if not proc_cmdline.exists():
+            return False
+        try:
+            cmdline = proc_cmdline.read_bytes().decode("utf-8", errors="ignore").replace("\x00", " ")
+        except OSError:
+            return False
+
+        host, port = self._parse_host_port(metadata.base_url)
+        required_tokens = [
+            "vllm",
+            "--host",
+            host,
+            "--port",
+            str(port),
+        ]
+        for token in metadata.command:
+            if token in {"conda", "run", "--no-capture-output", "-n"}:
+                continue
+            if token.startswith("--") or "/" in token or "=" in token:
+                required_tokens.append(token)
+        return all(token in cmdline for token in dict.fromkeys(required_tokens))
+
+    def _write_managed_process_metadata(self, spec: ManagedServerSpec, pid: int) -> None:
+        metadata_path = self._metadata_path_for_process_key(spec.key)
+        metadata_path.write_text(
+            json.dumps(
+                {
+                    "process_key": spec.key,
+                    "pid": pid,
+                    "base_url": spec.base_url,
+                    "expected_models": list(spec.expected_models),
+                    "roles": sorted(spec.roles),
+                    "command": spec.command,
+                    "log_path": str(spec.log_path),
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+    def _metadata_path_for_process_key(self, process_key: str) -> Path:
+        digest = sha1(process_key.encode("utf-8")).hexdigest()[:12]
+        return self.logs_dir / f"managed_server_{digest}.json"
 
     @staticmethod
     def _parse_host_port(base_url: str) -> tuple[str, int]:

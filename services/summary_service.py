@@ -86,7 +86,7 @@ class SummaryService:
             progress_callback(0.2, warning)
 
         try:
-            keywords = self._extract_keywords_live(summary_text, n_keywords, progress_callback)
+            keywords = self._extract_keywords_with_format_retry(summary_text, n_keywords, progress_callback)
         except _SummaryContextLengthExceededError as exc:
             retry_reserved_tokens = max(
                 SUMMARY_CONTEXT_SAFETY_MARGIN,
@@ -101,12 +101,30 @@ class SummaryService:
             warning = warning or retry_warning or SUMMARY_AUTO_CUTOFF_WARNING
             if progress_callback:
                 progress_callback(0.3, "Summary input exceeded model context, retrying with stricter cutoff")
-            keywords = self._extract_keywords_live(summary_text, n_keywords, progress_callback)
+            keywords = self._extract_keywords_with_format_retry(summary_text, n_keywords, progress_callback)
         return KeywordResult(
             keywords=keywords,
             model=self.config.summary_model_name,
             warning=warning,
         )
+
+    def _extract_keywords_with_format_retry(
+        self,
+        text: str,
+        n_keywords: int,
+        progress_callback: ProgressCallback | None = None,
+    ) -> list[str]:
+        last_error: ModelResponseFormatError | None = None
+        for attempt in range(2):
+            try:
+                return self._extract_keywords_live(text, n_keywords, progress_callback)
+            except ModelResponseFormatError as exc:
+                last_error = exc
+                if attempt == 0 and progress_callback:
+                    progress_callback(0.6, "Summary response format invalid, retrying once")
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("Summary keyword extraction failed without a captured error")
 
     def _build_prompt(self, text: str, n_keywords: int) -> str:
         return f"""

@@ -380,6 +380,60 @@ class PipelineService:
         finally:
             self._cleanup_managed_servers(state.mode)
 
+    def stream_regenerate_keywords(
+        self,
+        *,
+        run_state_payload: dict,
+        progress_callback: ProgressCallback | None = None,
+    ) -> Iterator[PipelineRunState]:
+        state = PipelineRunState.model_validate(run_state_payload)
+        self._normalize_quiz_history(state)
+        self._validate_mode(state.mode)
+        storage = RunArtifactManager(self.config, state.run_id)
+        services = self._build_services(state.mode)
+
+        if not state.transcript:
+            raise ValueError("No transcript found. Run the pipeline first.")
+
+        self._reset_retrieval_and_quiz_after_keyword_refresh(state)
+        self._set_step(state, "summary", "running", "Regenerating keywords")
+        yield self._persist_and_copy(state, storage)
+
+        try:
+            self._prepare_server_for_step(state.mode, "summary")
+            keyword_result = services["summary"].extract_keywords(
+                state.transcript,
+                state.parameters.n_keywords,
+                progress_callback=self._step_progress(progress_callback, "summary"),
+            )
+            state.summary_warning = keyword_result.warning
+            state.keywords = keyword_result.keywords
+            keyword_artifact = storage.save_json("outputs/keywords.json", keyword_result.model_dump(mode="json"))
+            summary_message = f"Regenerated {len(state.keywords)} keywords"
+            if keyword_result.warning:
+                summary_message = f"{summary_message}. {keyword_result.warning}"
+            self._set_step(
+                state,
+                "summary",
+                "completed",
+                summary_message,
+                artifact_path=keyword_artifact,
+            )
+            self._release_server_after_step(state.mode, "summary")
+            if progress_callback:
+                progress_callback(self.STEP_PROGRESS["summary"][1], "Keyword regeneration completed")
+            yield self._persist_and_copy(state, storage)
+        except Exception as exc:
+            error_message, error_payload = self._build_error_record(storage, "summary", exc)
+            state.errors.append(error_message)
+            storage.save_json("outputs/error.json", error_payload)
+            self._set_step(state, "summary", "failed", "Keyword regeneration failed", error=error_message)
+            if progress_callback:
+                progress_callback(self.STEP_PROGRESS["summary"][0], f"Summary failed: {error_message}")
+            yield self._persist_and_copy(state, storage)
+        finally:
+            self._cleanup_managed_servers(state.mode)
+
     def _create_state(self, run_id: str, mode: str, parameters: PipelineParameters) -> PipelineRunState:
         steps = {
             key: StepStatus(key=key, label=label)
@@ -464,6 +518,23 @@ class PipelineService:
             "quiz",
             "pending",
             "RAG updated. Manually regenerate quiz to use the latest retrieval results.",
+        )
+
+    def _reset_retrieval_and_quiz_after_keyword_refresh(self, state: PipelineRunState) -> None:
+        state.retrieved_chunks = []
+        state.quiz_result = None
+        state.quiz_results = []
+        self._set_step(
+            state,
+            "retrieval",
+            "pending",
+            "Keywords updated. Run RAG to refresh retrieval results.",
+        )
+        self._set_step(
+            state,
+            "quiz",
+            "pending",
+            "Keywords updated. Run RAG and regenerate quiz to use the latest retrieval results.",
         )
 
     def _normalize_quiz_history(self, state: PipelineRunState) -> None:

@@ -16,14 +16,41 @@ class _FakeResponse:
 
 
 class _FakeOpenAIClient:
+    calls = 0
+
     def __init__(self, *args, **kwargs) -> None:
         self.chat = types.SimpleNamespace(
             completions=types.SimpleNamespace(create=self._create),
         )
 
+    @classmethod
+    def reset(cls) -> None:
+        cls.calls = 0
+
     @staticmethod
     def _create(*args, **kwargs):
+        _FakeOpenAIClient.calls += 1
         return _FakeResponse("keywords: tree, graph")
+
+
+class _FormatRetryOpenAIClient:
+    calls = 0
+
+    def __init__(self, *args, **kwargs) -> None:
+        self.chat = types.SimpleNamespace(
+            completions=types.SimpleNamespace(create=self._create),
+        )
+
+    @classmethod
+    def reset(cls) -> None:
+        cls.calls = 0
+
+    @staticmethod
+    def _create(*args, **kwargs):
+        _FormatRetryOpenAIClient.calls += 1
+        if _FormatRetryOpenAIClient.calls == 1:
+            return _FakeResponse("keywords: tree, graph")
+        return _FakeResponse('{"keywords": ["tree", "graph"]}')
 
 
 class _CapturingOpenAIClient:
@@ -77,10 +104,23 @@ class SummaryServiceTest(unittest.TestCase):
         fake_module = types.SimpleNamespace(OpenAI=_FakeOpenAIClient)
         with patch.dict(sys.modules, {"openai": fake_module}):
             service = SummaryService(AppConfig())
+            _FakeOpenAIClient.reset()
             with self.assertRaises(ModelResponseFormatError) as context:
                 service.extract_keywords("Binary search tree lecture content", 3)
         self.assertIn("parsable keywords JSON", str(context.exception))
         self.assertEqual(context.exception.raw_response, "keywords: tree, graph")
+        self.assertEqual(_FakeOpenAIClient.calls, 2)
+
+    def test_extract_keywords_retries_once_on_format_error(self) -> None:
+        fake_module = types.SimpleNamespace(OpenAI=_FormatRetryOpenAIClient)
+        with patch.dict(sys.modules, {"openai": fake_module}):
+            service = SummaryService(AppConfig())
+            _FormatRetryOpenAIClient.reset()
+            with patch.object(service, "_load_tokenizer", return_value=None):
+                result = service.extract_keywords("Binary search tree lecture content", 3)
+
+        self.assertEqual(result.keywords, ["tree", "graph"])
+        self.assertEqual(_FormatRetryOpenAIClient.calls, 2)
 
     def test_extract_keywords_auto_cuts_off_oversized_summary_input(self) -> None:
         fake_module = types.SimpleNamespace(OpenAI=_CapturingOpenAIClient)
