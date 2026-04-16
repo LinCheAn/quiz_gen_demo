@@ -114,6 +114,102 @@ class QuizServiceTest(unittest.TestCase):
 
         self.assertEqual(question.question, "Original stem")
 
+    def test_parse_reference_question_response_accepts_code_fenced_json(self) -> None:
+        service = self._build_service()
+        question = service._parse_reference_question_response(
+            """```json
+            {
+              "question": [
+                {
+                  "question": "What is alpha?",
+                  "options": {
+                    "A": "A1",
+                    "B": "B1",
+                    "C": "C1",
+                    "D": "D1"
+                  },
+                  "answer": "A"
+                }
+              ]
+            }
+            ```"""
+        )
+
+        self.assertEqual(question.question, "What is alpha?")
+        self.assertEqual(question.options["D"], "D1")
+        self.assertEqual(question.answer, "A")
+
+    def test_parse_reference_question_response_extracts_json_from_wrapped_text(self) -> None:
+        service = self._build_service()
+        question = service._parse_reference_question_response(
+            """
+            Here is the quiz:
+            {
+              "question": [
+                {
+                  "question": "What is alpha?",
+                  "options": {
+                    "A": "A1",
+                    "B": "B1",
+                    "C": "C1",
+                    "D": "D1"
+                  },
+                  "answer": "D"
+                }
+              ]
+            }
+            Thanks.
+            """
+        )
+
+        self.assertEqual(question.question, "What is alpha?")
+        self.assertEqual(question.answer, "D")
+
+    def test_parse_reference_question_response_reports_json_syntax_error(self) -> None:
+        service = self._build_service()
+
+        with self.assertRaisesRegex(RuntimeError, r"Quiz response JSON syntax error at line \d+ column \d+"):
+            service._parse_reference_question_response(
+                """
+                {
+                  "question": [
+                    {
+                      "question": "What is alpha?",
+                      "options": {
+                        "A": "A1",
+                        "B": B1,
+                        "C": "C1",
+                        "D": "D1"
+                      },
+                      "answer": "B"
+                    }
+                  ]
+                }
+                """
+            )
+
+    def test_parse_reference_question_response_reports_missing_option_d(self) -> None:
+        service = self._build_service()
+
+        with self.assertRaisesRegex(RuntimeError, "Quiz response missing option D"):
+            service._parse_reference_question_response(
+                """
+                {
+                  "question": [
+                    {
+                      "question": "What is alpha?",
+                      "options": {
+                        "A": "A1",
+                        "B": "B1",
+                        "C": "C1"
+                      },
+                      "answer": "B"
+                    }
+                  ]
+                }
+                """
+            )
+
     def test_resolve_question_stems_prefers_custom_questions(self) -> None:
         service = self._build_service()
         stems = service._resolve_question_stems(

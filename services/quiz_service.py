@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Callable, Iterable
 
 from services.summary_service import (
     collapse_whitespace,
     endpoint_client_hint,
     endpoint_runtime_hint,
-    extract_json_fragment,
 )
 from utils.config import AppConfig
 from utils.errors import ModelResponseFormatError
@@ -428,10 +428,92 @@ class QuizService:
         *,
         expected_question: str | None = None,
     ) -> QuizQuestion:
-        payload = extract_json_fragment(raw_content)
-        if payload is None:
-            raise RuntimeError("Quiz model did not return parsable JSON")
+        payload = self._extract_quiz_payload(raw_content)
         return self._parse_reference_question_payload(payload, expected_question=expected_question)
+
+    def _extract_quiz_payload(self, raw_content: str) -> dict[str, object]:
+        cleaned = self._strip_code_fence(raw_content).strip()
+        if not cleaned:
+            raise RuntimeError("Quiz model returned an empty response")
+
+        payload, decode_error = self._load_json_object(cleaned)
+        if payload is not None:
+            return payload
+
+        fragment = self._extract_balanced_json_object(cleaned)
+        if fragment is None:
+            if decode_error is not None:
+                raise RuntimeError(self._format_json_decode_error(decode_error))
+            raise RuntimeError("Quiz model response does not contain a JSON object")
+
+        payload, decode_error = self._load_json_object(fragment)
+        if payload is not None:
+            return payload
+        if decode_error is not None:
+            raise RuntimeError(self._format_json_decode_error(decode_error))
+        raise RuntimeError("Quiz model did not return a JSON object payload")
+
+    @staticmethod
+    def _strip_code_fence(text: str) -> str:
+        cleaned = text.strip()
+        if not cleaned.startswith("```"):
+            return cleaned
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, count=1).strip()
+        cleaned = re.sub(r"\s*```$", "", cleaned, count=1).strip()
+        return cleaned
+
+    @staticmethod
+    def _load_json_object(text: str) -> tuple[dict[str, object] | None, json.JSONDecodeError | None]:
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError as exc:
+            return None, exc
+        if isinstance(payload, dict):
+            return payload, None
+        return None, None
+
+    @staticmethod
+    def _extract_balanced_json_object(text: str) -> str | None:
+        start_idx: int | None = None
+        depth = 0
+        in_string = False
+        escape = False
+
+        for index, char in enumerate(text):
+            if start_idx is None:
+                if char == "{":
+                    start_idx = index
+                    depth = 1
+                continue
+
+            if in_string:
+                if escape:
+                    escape = False
+                elif char == "\\":
+                    escape = True
+                elif char == '"':
+                    in_string = False
+                continue
+
+            if char == '"':
+                in_string = True
+            elif char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start_idx : index + 1]
+
+        if start_idx is None:
+            return None
+        return text[start_idx:]
+
+    @staticmethod
+    def _format_json_decode_error(exc: json.JSONDecodeError) -> str:
+        return (
+            "Quiz response JSON syntax error "
+            f"at line {exc.lineno} column {exc.colno}: {exc.msg}"
+        )
 
     def _parse_reference_question_payload(
         self,
