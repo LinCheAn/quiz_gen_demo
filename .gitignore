@@ -10,3 +10,4 @@ models/cache/*
 !models/cache/.gitkeep
 
 codex_gradio_demo_prompt.md
+.codex/

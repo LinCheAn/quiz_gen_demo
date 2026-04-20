@@ -24,7 +24,13 @@ class ModelRegistryTest(unittest.TestCase):
 
         self.assertEqual(runtime_config.summary_model_name, selection.summary.model_name)
         self.assertEqual(runtime_config.summary_server_model, selection.summary.server_model)
-        self.assertEqual(runtime_config.summary_model_path, selection.summary.lora_path)
+        if selection.summary.lora_path is None:
+            self.assertIsNone(runtime_config.summary_model_path)
+        else:
+            self.assertEqual(
+                runtime_config.summary_model_path,
+                str((config.project_root / selection.summary.lora_path).resolve()),
+            )
         self.assertEqual(runtime_config.quiz_model_name, selection.quiz.model_name)
         if selection.quiz.lora_path is None:
             self.assertIsNone(runtime_config.quiz_model_path)
@@ -136,6 +142,8 @@ class ModelRegistryTest(unittest.TestCase):
             project_root = Path(tempdir)
             adapter_dir = project_root / "models" / "adapters" / "grpo_v4.2"
             adapter_dir.mkdir(parents=True, exist_ok=True)
+            summary_adapter_dir = project_root / "models" / "adapters" / "dpo_v9.3_ocw"
+            summary_adapter_dir.mkdir(parents=True, exist_ok=True)
             config = AppConfig(project_root=project_root)
             config.ensure_directories()
             registry = ModelRegistry.load(Path(__file__).resolve().parents[1] / "model_info.json")

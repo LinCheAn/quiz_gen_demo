@@ -1,0 +1,29 @@
+services:
+  demo:
+    image: ${QUIZ_GEN_DEMO_IMAGE:-your-dockerhub-user/quiz-gen-demo:latest}
+    ports:
+      - "${APP_PORT:-7860}:${APP_PORT:-7860}"
+    environment:
+      APP_HOST: 0.0.0.0
+      APP_PORT: ${APP_PORT:-7860}
+      AUTO_START_MODEL_SERVERS: ${AUTO_START_MODEL_SERVERS:-1}
+      MODEL_SERVER_START_STRATEGY: ${MODEL_SERVER_START_STRATEGY:-sequential}
+      HF_HOME: /app/models/cache/huggingface
+      HF_HUB_CACHE: /app/models/cache/huggingface/hub
+      TRANSFORMERS_CACHE: /app/models/cache/huggingface/transformers
+      ASR_CONDA_ENV: ""
+      EMBEDDING_CONDA_ENV: ""
+      SUMMARY_SERVER_CONDA_ENV: ""
+      QUIZ_SERVER_CONDA_ENV: ""
+    volumes:
+      - ./data:/app/data
+      - ./artifacts:/app/artifacts
+      - ./models:/app/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${GPU_ID:-0}"]
+              capabilities: [gpu]
+    restart: unless-stopped
