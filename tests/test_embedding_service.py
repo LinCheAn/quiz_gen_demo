@@ -13,6 +13,25 @@ from utils.schemas import TextChunk
 
 
 class EmbeddingServiceTest(unittest.TestCase):
+    def test_worker_failure_includes_original_import_error(self) -> None:
+        config = AppConfig()
+        service = EmbeddingService(config)
+        chunks = [TextChunk(chunk_id="chunk_001", text="tree", start_char=0, end_char=4)]
+        completed = subprocess.CompletedProcess(
+            args=[],
+            returncode=1,
+            stdout="",
+            stderr=(
+                "Traceback ...\n"
+                "RuntimeError: Failed to import FlagEmbedding in the embedding runtime environment. "
+                "Original import error: cannot import name 'is_torch_fx_available'"
+            ),
+        )
+
+        with patch("services.embedding_service.subprocess.run", return_value=completed):
+            with self.assertRaisesRegex(RuntimeError, "is_torch_fx_available"):
+                service.retrieve(chunks=chunks, keywords=["tree"], top_k=1)
+
     def test_retrieval_uses_configured_conda_env_worker(self) -> None:
         config = AppConfig()
         config.embedding_conda_env = "inference"

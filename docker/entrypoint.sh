@@ -11,4 +11,4 @@ mkdir -p \
   /app/data/uploads \
   /app/artifacts
 
-exec python /app/app.py --port "${APP_PORT:-7860}"
+exec python3 /app/app.py --port "${APP_PORT:-7860}"
