@@ -121,8 +121,13 @@ def resolve_state_model_selection(state: PipelineRunState) -> ModelSelectionSnap
     )
 
 
+def resolve_state_asr_preset_id(state: PipelineRunState) -> str:
+    return state.parameters.asr_preset_id or APP_CONFIG.asr_preset_id
+
+
 def format_run_info(state: PipelineRunState) -> dict[str, Any]:
     model_selection = resolve_state_model_selection(state)
+    asr_preset = APP_CONFIG.resolve_asr_preset(resolve_state_asr_preset_id(state))
     return {
         "run_id": state.run_id,
         "mode": state.mode,
@@ -132,7 +137,9 @@ def format_run_info(state: PipelineRunState) -> dict[str, Any]:
         "quiz_generation_count": state.quiz_generation_count,
         "summary_model_id": model_selection.summary.id,
         "quiz_versions_available": len(resolve_quiz_results(state)),
-        "asr_model_name": APP_CONFIG.asr_model_name,
+        "asr_preset_id": asr_preset.id,
+        "asr_backend": asr_preset.backend,
+        "asr_model_name": asr_preset.model_name,
         "asr_conda_env": APP_CONFIG.asr_conda_env,
         "summary_model_name": model_selection.summary.model_name,
         "summary_base_url": model_selection.summary.base_url,
@@ -339,15 +346,25 @@ def render_regeneration_outputs(
 
 def build_service() -> PipelineService:
     default_selection = APP_MODEL_REGISTRY.resolve_selection()
-    return build_service_for_selection(default_selection)
+    return build_service_for_selection(APP_CONFIG.asr_preset_id, default_selection)
 
 
-def build_service_for_selection(selection: ModelSelectionSnapshot) -> PipelineService:
+def build_service_for_selection(
+    asr_preset_id: str,
+    selection: ModelSelectionSnapshot,
+) -> PipelineService:
     try:
         validate_model_selection_assets(APP_CONFIG, selection)
     except ValueError as exc:
         raise gr.Error(str(exc)) from exc
-    runtime_config = build_runtime_config(APP_CONFIG, selection)
+    runtime_config = build_runtime_config(
+        APP_CONFIG.copy_with_overrides(
+            asr_preset_id=asr_preset_id,
+            asr_backend="",
+            asr_model_name="",
+        ),
+        selection,
+    )
     return PipelineService(
         runtime_config,
         ModelServerManager(runtime_config),
@@ -366,6 +383,7 @@ def run_pipeline_ui(
     chunk_overlap: int,
     quiz_question_count: int,
     quiz_variant_count: int,
+    asr_preset_id: str,
     summary_model_id: str,
     quiz_model_id: str,
 ):
@@ -382,11 +400,12 @@ def run_pipeline_ui(
         chunk_overlap=chunk_overlap,
         quiz_question_count=quiz_question_count,
         quiz_variant_count=quiz_variant_count,
+        asr_preset_id=asr_preset_id,
         summary_model_id=summary_model_id,
         quiz_model_id=quiz_model_id,
     )
     selection = APP_MODEL_REGISTRY.resolve_selection(summary_model_id, quiz_model_id)
-    service = build_service_for_selection(selection)
+    service = build_service_for_selection(asr_preset_id, selection)
 
     is_first_yield = True
     for state in service.stream_pipeline(
@@ -410,7 +429,10 @@ def regenerate_ui(
         raise gr.Error("請先執行 Run Pipeline。")
 
     state = PipelineRunState.model_validate(state_payload)
-    service = build_service_for_selection(resolve_state_model_selection(state))
+    service = build_service_for_selection(
+        resolve_state_asr_preset_id(state),
+        resolve_state_model_selection(state),
+    )
 
     custom_questions = parse_custom_question_lines(custom_question_text) if options_only else None
 
@@ -432,7 +454,10 @@ def run_rag_ui(
         raise gr.Error("請先執行 Run Pipeline。")
 
     state = PipelineRunState.model_validate(state_payload)
-    service = build_service_for_selection(resolve_state_model_selection(state))
+    service = build_service_for_selection(
+        resolve_state_asr_preset_id(state),
+        resolve_state_model_selection(state),
+    )
     custom_keywords = parse_custom_keywords(custom_keywords_text)
 
     is_first_yield = True
@@ -449,7 +474,10 @@ def regenerate_keywords_ui(state_payload: dict | None):
         raise gr.Error("請先執行 Run Pipeline。")
 
     state = PipelineRunState.model_validate(state_payload)
-    service = build_service_for_selection(resolve_state_model_selection(state))
+    service = build_service_for_selection(
+        resolve_state_asr_preset_id(state),
+        resolve_state_model_selection(state),
+    )
 
     is_first_yield = True
     for state in service.stream_regenerate_keywords(
@@ -497,6 +525,7 @@ def build_demo() -> gr.Blocks:
             f"""
             `AUTO_START_MODEL_SERVERS={int(config.auto_start_model_servers)}`，
             啟動策略為 `{config.model_server_start_strategy}`，
+            預設 ASR preset 為 `{config.asr_preset_id}`，
             ASR stage 在 {describe_runtime_target(config.asr_conda_env)} 執行，
             embedding stage 在 {describe_runtime_target(config.embedding_conda_env)} 執行。
             模型選單路徑 `{config.model_info_path}`。
@@ -547,6 +576,11 @@ def build_demo() -> gr.Blocks:
                     value=1,
                     step=1,
                     label="Number of Quiz Variants",
+                )
+                asr_preset_input = gr.Dropdown(
+                    choices=config.asr_choices(),
+                    value=config.asr_preset_id,
+                    label="ASR Preset",
                 )
                 summary_model_input = gr.Dropdown(
                     choices=APP_MODEL_REGISTRY.summary_choices(),
@@ -665,6 +699,7 @@ def build_demo() -> gr.Blocks:
                 chunk_overlap_input,
                 quiz_question_count_input,
                 quiz_variant_count_input,
+                asr_preset_input,
                 summary_model_input,
                 quiz_model_input,
             ],

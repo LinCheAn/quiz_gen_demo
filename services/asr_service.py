@@ -37,11 +37,15 @@ class ASRService:
         if progress_callback:
             progress_callback(
                 0.15,
-                f"Running ASR in {describe_runtime_target(self.config.asr_conda_env)}",
+                (
+                    f"Running {self.config.asr_backend} ASR "
+                    f"in {describe_runtime_target(self.config.asr_conda_env)}"
+                ),
             )
 
         payload = {
             "audio_path": str(audio_path),
+            "backend": self.config.asr_backend,
             "model_name": self.config.asr_model_name,
             "chunk_length_s": self.config.asr_chunk_length_s,
         }
@@ -63,7 +67,8 @@ class ASRService:
 
         device = str(parsed.get("device", "")).strip() or None
         print(
-            f"[asr] Completed with model {self.config.asr_model_name} on "
+            f"[asr] Completed with backend {self.config.asr_backend} "
+            f"model {self.config.asr_model_name} on "
             f"{device or 'unknown'} via {describe_runtime_target(self.config.asr_conda_env)}"
         )
 

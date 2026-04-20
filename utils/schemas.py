@@ -29,6 +29,7 @@ class PipelineParameters(BaseModel):
     top_k: int = 5
     chunk_size: int = 512
     chunk_overlap: int = 64
+    asr_preset_id: str | None = None
     summary_model_id: str | None = None
     quiz_model_id: str | None = None
     quiz_question_count: int = 3

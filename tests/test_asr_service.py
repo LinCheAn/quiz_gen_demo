@@ -41,9 +41,12 @@ class ASRServiceTest(unittest.TestCase):
 
         extract_audio_mock.assert_called_once()
         command = run_mock.call_args.args[0]
+        payload = json.loads(run_mock.call_args.kwargs["input"])
         self.assertEqual(command[:5], ["conda", "run", "--no-capture-output", "-n", "inference"])
         self.assertEqual(command[5], "python")
         self.assertEqual(command[6], str(Path("services/asr_worker.py").resolve()))
+        self.assertEqual(payload["backend"], config.asr_backend)
+        self.assertEqual(payload["model_name"], config.asr_model_name)
         self.assertEqual(result.transcript, "測試逐字稿")
         self.assertEqual(result.language, "zh")
         self.assertEqual(result.device, "cuda")
@@ -69,8 +72,10 @@ class ASRServiceTest(unittest.TestCase):
                     service.transcribe(str(video_path), str(Path(tmpdir) / "audio"))
 
         command = run_mock.call_args.args[0]
+        payload = json.loads(run_mock.call_args.kwargs["input"])
         self.assertEqual(command[0], sys.executable)
         self.assertEqual(command[1], str(Path("services/asr_worker.py").resolve()))
+        self.assertEqual(payload["backend"], config.asr_backend)
 
 
 if __name__ == "__main__":

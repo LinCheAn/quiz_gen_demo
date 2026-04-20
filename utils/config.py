@@ -42,6 +42,31 @@ def describe_runtime_target(env_name: str | None) -> str:
     return "current runtime"
 
 
+@dataclass(frozen=True)
+class ASRPreset:
+    id: str
+    label: str
+    backend: str
+    model_name: str
+
+
+ASR_PRESETS: tuple[ASRPreset, ...] = (
+    ASRPreset(
+        id="legacy-transformers-breeze-asr-25",
+        label="Legacy Transformers Breeze ASR 25",
+        backend="transformers",
+        model_name="MediaTek-Research/Breeze-ASR-25",
+    ),
+    ASRPreset(
+        id="faster-whisper-breeze-asr-25",
+        label="Faster-Whisper Breeze ASR 25",
+        backend="faster_whisper",
+        model_name="SoybeanMilk/faster-whisper-Breeze-ASR-25",
+    ),
+)
+ASR_PRESETS_BY_ID = {preset.id: preset for preset in ASR_PRESETS}
+
+
 @dataclass
 class AppConfig:
     project_root: Path = PROJECT_ROOT
@@ -52,7 +77,9 @@ class AppConfig:
     hf_home: Path | None = None
     model_info_path: Path | None = None
     default_mode: str = os.getenv("DEMO_DEFAULT_MODE", "live")
-    asr_model_name: str = os.getenv("ASR_MODEL_NAME", "MediaTek-Research/Breeze-ASR-25")
+    asr_preset_id: str = os.getenv("ASR_PRESET_ID", "faster-whisper-breeze-asr-25")
+    asr_backend: str = os.getenv("ASR_BACKEND", "")
+    asr_model_name: str = os.getenv("ASR_MODEL_NAME", "")
     asr_chunk_length_s: int = _env_int("ASR_CHUNK_LENGTH_S", 30)
     asr_conda_env: str = os.getenv("ASR_CONDA_ENV", "")
     summary_model_name: str = os.getenv("SUMMARY_MODEL_NAME", "Qwen/Qwen3.5-4B")
@@ -115,11 +142,19 @@ class AppConfig:
         self.artifacts_dir = Path(self.artifacts_dir or self.project_root / "artifacts")
         self.runs_dir = Path(self.runs_dir or self.artifacts_dir / "runs")
         self.default_mode = "live"
+        self.asr_preset_id = self.asr_preset_id.strip()
+        self.asr_backend = self.asr_backend.strip()
+        self.asr_model_name = self.asr_model_name.strip()
         self.asr_conda_env = self.asr_conda_env.strip()
         self.embedding_conda_env = self.embedding_conda_env.strip()
         self.summary_server_conda_env = self.summary_server_conda_env.strip()
         self.quiz_server_conda_env = self.quiz_server_conda_env.strip()
         self.model_server_start_strategy = self.model_server_start_strategy.strip().lower()
+        preset = self.resolve_asr_preset(self.asr_preset_id)
+        if not self.asr_backend:
+            self.asr_backend = preset.backend
+        if not self.asr_model_name:
+            self.asr_model_name = preset.model_name
         if self.model_server_start_strategy not in {"preload", "sequential"}:
             self.model_server_start_strategy = "sequential"
 
@@ -143,6 +178,17 @@ class AppConfig:
         config.ensure_directories()
         config.apply_environment_defaults()
         return config
+
+    def resolve_asr_preset(self, preset_id: str | None = None) -> ASRPreset:
+        resolved_id = (preset_id or self.asr_preset_id).strip()
+        try:
+            return ASR_PRESETS_BY_ID[resolved_id]
+        except KeyError as exc:
+            raise ValueError(f"Unknown ASR preset id: {resolved_id}") from exc
+
+    @staticmethod
+    def asr_choices() -> list[tuple[str, str]]:
+        return [(preset.label, preset.id) for preset in ASR_PRESETS]
 
 
 def load_config() -> AppConfig:

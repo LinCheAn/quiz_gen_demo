@@ -1,7 +1,7 @@
 {
   "defaults": {
-    "summary_model_id": "dpo-v9.3-ocw-fp8",
-    "quiz_model_id": "dpo-v9.3-ocw-fp8"
+    "summary_model_id": "llama-3.1-8b-instruct",
+    "quiz_model_id": "llama-3.1-8b-instruct"
   },
   "models": [
     {
