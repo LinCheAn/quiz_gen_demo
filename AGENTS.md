@@ -4,7 +4,7 @@
 `app.py` is the Gradio entrypoint and UI layer. Core workflow logic lives in `services/` (`asr_service.py`, `summary_service.py`, `embedding_service.py`, `quiz_service.py`, `pipeline_service.py`). Shared configuration, schemas, storage helpers, and model registry code live in `utils/`. Tests are in `tests/` and mirror the runtime modules with files such as `tests/test_pipeline_service.py`. Runtime inputs and outputs stay inside the repo: uploads go to `data/uploads/`, run artifacts to `artifacts/runs/`, and server logs to `artifacts/server_logs/`.
 
 ## Build, Test, and Development Commands
-Install dependencies with `pip install -r requirements.txt`.
+Install exact dependencies with `pip install -r requirements.lock.txt`. Use `requirements.txt` only when intentionally updating the dependency set and regenerating the lock file.
 
 Run the app locally with `python app.py`. To override the bind address, use `APP_HOST=0.0.0.0 APP_PORT=7860 python app.py`.
 

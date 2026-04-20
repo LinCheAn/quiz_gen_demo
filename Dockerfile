@@ -1,4 +1,5 @@
-FROM vllm/vllm-openai:latest
+ARG VLLM_OPENAI_IMAGE=vllm/vllm-openai:v0.19.1
+FROM ${VLLM_OPENAI_IMAGE}
 
 USER root
 
@@ -8,9 +9,9 @@ RUN apt-get update \
 
 WORKDIR /app
 
-COPY requirements.txt /app/requirements.txt
+COPY requirements.txt requirements.lock.txt /app/
 RUN python3 -m pip install --upgrade pip \
-    && python3 -m pip install --no-cache-dir -r /app/requirements.txt
+    && python3 -m pip install --no-cache-dir -r /app/requirements.lock.txt
 
 COPY . /app
 

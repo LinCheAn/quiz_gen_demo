@@ -215,7 +215,7 @@ Return up to {n_keywords} keywords.
         self._tokenizer_load_attempted = True
         try:
             from transformers import AutoTokenizer
-        except ImportError:
+        except Exception:
             return None
 
         model_candidates = [

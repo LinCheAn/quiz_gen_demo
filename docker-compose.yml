@@ -2,6 +2,8 @@ services:
   demo:
     build:
       context: .
+      args:
+        VLLM_OPENAI_IMAGE: ${VLLM_OPENAI_IMAGE:-vllm/vllm-openai:v0.19.1}
     image: quiz-gen-demo:latest
     ports:
       - "${APP_PORT:-7860}:${APP_PORT:-7860}"
@@ -21,5 +23,11 @@ services:
       - ./data:/app/data
       - ./artifacts:/app/artifacts
       - ./models:/app/models
-    gpus: all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${GPU_ID:-0}"]
+              capabilities: [gpu]
     restart: unless-stopped

@@ -1,3 +1,5 @@
+# Top-level project dependencies. After changing this file, validate the
+# environment and refresh requirements.lock.txt from the canonical demo env.
 gradio>=5.23.0
 openai>=1.65.0
 pydantic>=2.7.0

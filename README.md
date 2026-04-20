@@ -6,8 +6,8 @@
 
 目前交付方式改成：
 
-- project-relative 路徑，不再依賴 `/home/...` 這類個人機器絕對路徑
 - Docker-first，單一 runtime 內執行 app、ASR、embedding、vLLM
+- 鎖定 `demo` runtime 的 Python 套件版本與 vLLM base image tag
 - repo 內固定 `models/`、`data/`、`artifacts/` 結構
 - 以 NVIDIA GPU 為前提，不提供 CPU fallback
 
@@ -58,6 +58,40 @@ quiz_gen_demo/
 
 如果這兩個資料夾不存在，app 仍可啟動，但只有在你真的選到對應 preset 時才會報錯。預設 quiz model 已改成 base model `llama-3.1-8b-instruct`，不依賴額外 adapter。
 
+## 依賴版本管理
+
+- `requirements.txt`
+  - 維護者用的 top-level 依賴清單
+  - 只在你要調整或升級依賴時使用
+- `requirements.lock.txt`
+  - 目前 `demo` env 驗證過的完整鎖版結果
+  - 一般本地安裝、部署、Docker build 都應安裝這份檔案
+- `Dockerfile`
+  - 預設使用 `vllm/vllm-openai:v0.19.1`
+  - 若你需要切換到其他已驗證的 base image，可在 build 時覆蓋 `VLLM_OPENAI_IMAGE`
+
+一般使用方式：
+
+```bash
+pip install -r requirements.lock.txt
+```
+
+只有在你要更新依賴時，才使用以下流程：
+
+```bash
+conda activate demo
+pip install -r requirements.txt
+python -m unittest discover -s tests
+python -m pip freeze > requirements.lock.txt
+```
+
+也就是說：
+
+- `requirements.txt` 用來產生新的 lock file
+- `requirements.lock.txt` 用來重現已驗證可用的環境
+
+只有在確認新環境可用後，才更新 `requirements.lock.txt`。
+
 ## Docker 使用方式
 
 ### 前置條件
@@ -90,6 +124,20 @@ base model 仍使用 Hugging Face model id，第一次啟動時會下載到 `mod
 
 ```bash
 docker compose up --build
+```
+
+如果你要用 compose 覆蓋 base image：
+
+```bash
+VLLM_OPENAI_IMAGE=vllm/vllm-openai:v0.19.1 docker compose up --build
+```
+
+如果你要顯式指定 base image：
+
+```bash
+docker build \
+  --build-arg VLLM_OPENAI_IMAGE=vllm/vllm-openai:v0.19.1 \
+  -t quiz-gen-demo .
 ```
 
 啟動後預設可在：
@@ -194,7 +242,7 @@ python -m unittest discover -s tests
 ```bash
 conda create -n demo python=3.10 -y
 conda activate demo
-pip install -r requirements.txt
+pip install -r requirements.lock.txt
 python app.py
 ```
 
