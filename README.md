@@ -172,7 +172,7 @@ docker compose down
 指定要使用的 image：
 
 ```bash
-export QUIZ_GEN_DEMO_IMAGE=linchean/quiz-gen-demo:latest
+export QUIZ_GEN_DEMO_IMAGE=linchean327/quiz-gen-demo:latest
 ```
 
 直接啟動：
@@ -191,7 +191,7 @@ docker compose -f docker-compose.deploy.yml up -d
 更新到其他 image tag：
 
 ```bash
-export QUIZ_GEN_DEMO_IMAGE=your-image-repo/quiz-gen-demo:v2026-04-20
+export QUIZ_GEN_DEMO_IMAGE=linchean327/quiz-gen-demo:v2026-04-20
 docker compose -f docker-compose.deploy.yml pull
 docker compose -f docker-compose.deploy.yml up -d
 ```
