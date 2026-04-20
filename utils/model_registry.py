@@ -74,13 +74,43 @@ class ModelRegistry:
         return ModelSelectionSnapshot(summary=summary, quiz=quiz)
 
 
+def resolve_project_path(project_root: Path, path_value: str | None) -> str | None:
+    if not path_value:
+        return None
+    candidate = Path(path_value)
+    if candidate.is_absolute():
+        return str(candidate)
+    return str((project_root / candidate).resolve())
+
+
+def validate_model_selection_assets(config: AppConfig, selection: ModelSelectionSnapshot) -> None:
+    missing_assets: list[str] = []
+    for role_name, preset in (("summary", selection.summary), ("quiz", selection.quiz)):
+        resolved_path = resolve_project_path(config.project_root, preset.lora_path)
+        if resolved_path is None:
+            continue
+        if not Path(resolved_path).exists():
+            missing_assets.append(
+                f"{role_name} preset `{preset.id}` expects adapter path `{preset.lora_path}` "
+                f"(resolved to `{resolved_path}`)"
+            )
+
+    if missing_assets:
+        bullet_list = "\n".join(f"- {item}" for item in missing_assets)
+        raise ValueError(
+            "Missing model assets for the selected presets.\n"
+            "Place the adapter files under the repo `models/` directory or update `model_info.json`.\n"
+            f"{bullet_list}"
+        )
+
+
 def build_runtime_config(base_config: AppConfig, selection: ModelSelectionSnapshot) -> AppConfig:
     return base_config.copy_with_overrides(
         summary_model_name=selection.summary.model_name,
         summary_base_url=selection.summary.base_url,
-        summary_server_conda_env=selection.summary.server_conda_env,
+        summary_server_conda_env=(selection.summary.server_conda_env or "").strip(),
         summary_server_model=selection.summary.server_model,
-        summary_model_path=selection.summary.lora_path,
+        summary_model_path=resolve_project_path(base_config.project_root, selection.summary.lora_path),
         summary_base_model_name=selection.summary.server_model,
         summary_server_gpu_memory_utilization=selection.summary.gpu_memory_utilization,
         summary_server_max_model_len=selection.summary.max_model_len,
@@ -89,9 +119,9 @@ def build_runtime_config(base_config: AppConfig, selection: ModelSelectionSnapsh
         summary_server_quantization=selection.summary.quantization,
         quiz_model_name=selection.quiz.model_name,
         quiz_base_url=selection.quiz.base_url,
-        quiz_model_path=selection.quiz.lora_path,
+        quiz_model_path=resolve_project_path(base_config.project_root, selection.quiz.lora_path),
         quiz_base_model_name=selection.quiz.server_model,
-        quiz_server_conda_env=selection.quiz.server_conda_env,
+        quiz_server_conda_env=(selection.quiz.server_conda_env or "").strip(),
         quiz_server_model=selection.quiz.server_model,
         quiz_server_gpu_memory_utilization=selection.quiz.gpu_memory_utilization,
         quiz_server_max_model_len=selection.quiz.max_model_len,

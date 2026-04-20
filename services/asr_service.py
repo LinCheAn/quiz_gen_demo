@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Callable
 
 from services.summary_service import extract_json_fragment
-from utils.config import AppConfig
+from utils.config import AppConfig, describe_runtime_target
 from utils.schemas import TranscriptResult
 
 
@@ -37,7 +37,7 @@ class ASRService:
         if progress_callback:
             progress_callback(
                 0.15,
-                f"Running ASR in conda env `{self.config.asr_conda_env or 'current'}`",
+                f"Running ASR in {describe_runtime_target(self.config.asr_conda_env)}",
             )
 
         payload = {
@@ -64,7 +64,7 @@ class ASRService:
         device = str(parsed.get("device", "")).strip() or None
         print(
             f"[asr] Completed with model {self.config.asr_model_name} on "
-            f"{device or 'unknown'} via env `{self.config.asr_conda_env or 'current'}`"
+            f"{device or 'unknown'} via {describe_runtime_target(self.config.asr_conda_env)}"
         )
 
         if progress_callback and device:
@@ -99,7 +99,7 @@ class ASRService:
             raise RuntimeError(
                 "ASR failed while running "
                 f"`{' '.join(command)}`. "
-                f"Configured env: {self.config.asr_conda_env or 'current'}. "
+                f"Configured runtime target: {describe_runtime_target(self.config.asr_conda_env)}. "
                 f"STDERR: {stderr}\nSTDOUT: {stdout}"
             )
         return completed

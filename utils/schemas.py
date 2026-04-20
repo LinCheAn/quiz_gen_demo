@@ -40,7 +40,7 @@ class ModelPreset(BaseModel):
     label: str
     model_name: str
     base_url: str
-    server_conda_env: str
+    server_conda_env: str | None = None
     server_model: str
     lora_path: str | None = None
     gpu_memory_utilization: float

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Callable
 
 from services.summary_service import extract_json_fragment
-from utils.config import AppConfig
+from utils.config import AppConfig, describe_runtime_target
 from utils.schemas import RetrievalResult, RetrievedChunk, TextChunk
 
 
@@ -41,7 +41,7 @@ class EmbeddingService:
         if progress_callback:
             progress_callback(
                 0.1,
-                f"Running embedding retrieval in conda env `{self.config.embedding_conda_env or 'current'}`",
+                f"Running embedding retrieval in {describe_runtime_target(self.config.embedding_conda_env)}",
             )
 
         payload = {
@@ -76,7 +76,9 @@ class EmbeddingService:
                 cwd=self.config.project_root,
             )
         except FileNotFoundError as exc:
-            raise RuntimeError("conda is required to launch the embedding worker environment") from exc
+            if self.config.embedding_conda_env.strip():
+                raise RuntimeError("conda is required to launch the embedding worker environment") from exc
+            raise RuntimeError("Python is required to launch the embedding worker") from exc
 
         if completed.returncode != 0:
             stderr = completed.stderr.strip() or "<empty>"
@@ -84,7 +86,7 @@ class EmbeddingService:
             raise RuntimeError(
                 "Embedding retrieval failed while running "
                 f"`{' '.join(command)}`. "
-                f"Configured env: {self.config.embedding_conda_env or 'current'}. "
+                f"Configured runtime target: {describe_runtime_target(self.config.embedding_conda_env)}. "
                 f"STDERR: {stderr}\nSTDOUT: {stdout}"
             )
         return completed

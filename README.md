@@ -1,10 +1,15 @@
 # Video Quiz Generation Gradio Demo
 
-這個專案是一個本地可執行的 Gradio WebUI demo，用來展示影片轉測驗題的 inference workflow：
+本專案提供一個可轉交的本地 demo，用來展示：
 
 `Video -> ASR -> Transcript -> Summary Keywords + Chunking -> Embedding Retrieval -> Quiz Generation`
 
-重點不是 production，而是讓流程可 demo、可觀察、可替換成既有模型程式。
+目前交付方式改成：
+
+- project-relative 路徑，不再依賴 `/home/...` 這類個人機器絕對路徑
+- Docker-first，單一 runtime 內執行 app、ASR、embedding、vLLM
+- repo 內固定 `models/`、`data/`、`artifacts/` 結構
+- 以 NVIDIA GPU 為前提，不提供 CPU fallback
 
 ## 專案結構
 
@@ -12,298 +17,191 @@
 quiz_gen_demo/
   app.py
   model_info.json
+  Dockerfile
+  docker-compose.yml
+  docker/
+    entrypoint.sh
+  models/
+    adapters/
+    cache/
+  data/
+    uploads/
+  artifacts/
+    runs/
+    server_logs/
   services/
-    asr_service.py
-    summary_service.py
-    chunk_service.py
-    embedding_service.py
-    quiz_service.py
-    pipeline_service.py
   utils/
-    config.py
-    model_registry.py
-    schemas.py
-    storage.py
-  data/uploads/
-  artifacts/runs/
   tests/
-  requirements.txt
-  README.md
 ```
 
-## 模組責任
+## 模型與資料目錄
 
-- `app.py`
-  - Gradio UI
-  - Pipeline status / progress 顯示
-  - 重新生成 quiz / 只重生 options 的按鈕事件
-- `services/asr_service.py`
-  - 影片抽音訊
-  - Breeze-ASR-25 wrapper
-  - 直接執行真實 ASR；失敗時不回退
-- `services/summary_service.py`
-  - transcript 關鍵字抽取
-  - 預設對接 OpenAI-compatible summary endpoint
-- `services/chunk_service.py`
-  - transcript chunking
-- `services/embedding_service.py`
-  - BGE-M3 retrieval
-  - 透過指定 conda env 執行 embedding worker
-- `services/quiz_service.py`
-  - quiz generation
-  - full regenerate / options-only regenerate
-- `services/pipeline_service.py`
-  - 串接整條 workflow
-  - step status、artifact 寫入、錯誤處理
-- `utils/config.py`
-  - 所有預設參數與環境變數
-- `utils/schemas.py`
-  - Pipeline state 與輸出 schema
-- `utils/storage.py`
-  - run artifact 路徑與 JSON/TXT 存取
+這個 repo 預設把模型相關路徑都收斂到 `models/`：
 
-## Artifact 與中繼檔
-
-所有過程檔案都只會寫在本專案內：
-
+- `models/adapters/`
+  - 放自訂 LoRA adapter
+  - `model_info.json` 內的 `lora_path` 一律是相對於 repo 的路徑
+- `models/cache/huggingface/`
+  - Hugging Face cache
+  - container 與本地執行都會預設把 `HF_HOME` 指到這裡
 - `data/uploads/`
-- `artifacts/runs/{run_id}/inputs/`
-- `artifacts/runs/{run_id}/audio/`
-- `artifacts/runs/{run_id}/outputs/`
+  - 上傳的影片 / 字幕
+- `artifacts/runs/`
+  - 每次 pipeline 的中繼結果
+- `artifacts/server_logs/`
+  - auto-start vLLM server 的 log
 
-每次點 `Run Pipeline` 都會建立新的 `run_id`，中繼資料包含：
+目前內建的 optional adapter preset：
 
-- `transcript.txt`
-- `keywords.json`
-- `chunks.json`
-- `retrieval.json`
-- `quiz_v{n}.json`
-- `state.json`
-- `error.json`（若失敗）
+- `models/adapters/grpo_v4.2/`
+- `models/adapters/dpo_v9.3_ocw/`
 
-## 安裝
+如果這兩個資料夾不存在，app 仍可啟動，但只有在你真的選到對應 preset 時才會報錯。預設 quiz model 已改成 base model `llama-3.1-8b-instruct`，不依賴額外 adapter。
 
-### 方案 A：跑 UI 與完整 live pipeline
+## Docker 使用方式
 
-建議建立新的 UI conda environment，不污染既有模型環境：
+### 前置條件
 
-```bash
-conda create -n quiz-demo python=3.10 -y
-conda activate quiz-demo
-pip install -r requirements.txt
-```
+- Docker
+- Docker Compose v2
+- NVIDIA GPU
+- NVIDIA Container Toolkit
 
-### 方案 B：接既有模型推論環境
+### 1. 準備模型目錄
 
-此專案現在只支援 `live` 模式：
-
-- ASR 需要 `transformers`, `torch`, `numpy`
-- 可用 `ASR_CONDA_ENV` 指定 ASR worker 執行的 conda env
-- retrieval 會在 `EMBEDDING_CONDA_ENV` 指定的環境內執行 `FlagEmbedding`
-- summary / quiz 預設走 OpenAI-compatible endpoint
-
-建議做法：
-
-- UI 跑在新環境 `quiz-demo`
-- 模型推論沿用你既有的 conda environment 或既有 vLLM service
-
-## 執行
+最少只需要讓 repo 內有這些目錄：
 
 ```bash
-conda run -n demo python app.py
+mkdir -p models/adapters models/cache/huggingface data/uploads artifacts
 ```
 
-啟動後，`Run Pipeline` 旁邊會提供 `Summary Model` 與 `Quiz Model` 兩個下拉選單。兩者都從 repo 內的 `model_info.json` 載入，並在你按下 `Run Pipeline` 的當下鎖定到該次 run；後續的 `RAG` / `Regenerate` 會沿用同一份 run snapshot，不會因為 UI 下拉選單後來變動而改掉。
-
-預設會啟在：
+如果你要使用 GRPO / DPO preset，再把 adapter 放進：
 
 ```bash
-http://0.0.0.0:7860
+models/adapters/grpo_v4.2/
+models/adapters/dpo_v9.3_ocw/
 ```
 
-你也可以用環境變數覆蓋：
+base model 仍使用 Hugging Face model id，第一次啟動時會下載到 `models/cache/huggingface/`。
+
+### 2. 啟動
+
+主要入口：
 
 ```bash
-APP_HOST=0.0.0.0 APP_PORT=7860 python app.py
+docker compose up --build
 ```
 
-預設情況下，`app.py` 使用 `MODEL_SERVER_START_STRATEGY=sequential`：
-
-- 進入 summary step 前啟動 summary server: `http://127.0.0.1:8001/v1`
-- summary 完成後釋放 summary server
-- 進入 quiz step 前啟動 quiz server: `http://127.0.0.1:8000/v1`
-- quiz 完成後釋放 quiz server
-
-若你想保留舊行為，在 app 啟動時一次預載兩個 server，可改成：
+啟動後預設可在：
 
 ```bash
-MODEL_SERVER_START_STRATEGY=preload conda run -n demo python app.py
+http://127.0.0.1:7860
 ```
 
-自動啟動的服務預設會透過 `conda run -n vllm vllm serve ...` 啟動，因此需要：
+### 3. 常用操作
 
-- 本機可用的 CUDA
-- `vllm` conda env 存在
-- 可以載入對應模型
-
-如果你要手動管理 summary / quiz server，不要自動起模型服務：
+背景執行：
 
 ```bash
-AUTO_START_MODEL_SERVERS=0 conda run -n demo python app.py
+docker compose up --build -d
 ```
 
-## 模型對接位置
+看 log：
 
-### model_info.json
+```bash
+docker compose logs -f demo
+```
 
-檔案：`model_info.json`
+停止：
 
-`Summary Model` 與 `Quiz Model` 下拉選單都從這個檔案讀取。格式分成：
+```bash
+docker compose down
+```
+
+### 4. `docker run` 備用指令
+
+```bash
+docker build -t quiz-gen-demo .
+docker run --rm -it \
+  --gpus all \
+  -p 7860:7860 \
+  -v "$(pwd)/models:/app/models" \
+  -v "$(pwd)/data:/app/data" \
+  -v "$(pwd)/artifacts:/app/artifacts" \
+  -e APP_HOST=0.0.0.0 \
+  -e APP_PORT=7860 \
+  quiz-gen-demo
+```
+
+## 執行行為
+
+預設情況下：
+
+- `AUTO_START_MODEL_SERVERS=1`
+- `MODEL_SERVER_START_STRATEGY=sequential`
+- ASR / embedding worker 直接使用 current runtime
+- summary / quiz server 也直接使用 current runtime 啟動 `vllm serve`
+
+如果你要自己管理 summary / quiz endpoint，可關掉 auto-start：
+
+```bash
+AUTO_START_MODEL_SERVERS=0 docker compose up
+```
+
+## `model_info.json`
+
+`Summary Model` 與 `Quiz Model` 下拉選單都從 `model_info.json` 載入。
+
+格式重點：
 
 - `defaults.summary_model_id`
 - `defaults.quiz_model_id`
 - `models[]`
 
-其中：
+每個 preset 可提供：
 
-- `models[]` 是共用 model pool，`Summary Model` 與 `Quiz Model` 兩個 dropdown 都從這裡選。
-- 每個 model preset 需要提供 model id、label、API `base_url`、對應的 served `model_name`，以及啟動 vLLM server 所需的 conda env / base model / vLLM 參數。
-- 可額外提供 `lora_path`。有提供時會以 LoRA adapter 啟動；省略時則直接以 `server_model` 當作 base model 啟動。
-- 若 summary 選 base model、quiz 選同一個 base model 上的 LoRA alias，server manager 會盡量共用同一個 vLLM process，避免在兩個 step 之間重新 loading。
+- `id`
+- `label`
+- `model_name`
+- `base_url`
+- `server_model`
+- `server_conda_env`
+- `lora_path`
+- `gpu_memory_utilization`
+- `max_model_len`
+- `tensor_parallel_size`
+- `dtype`
+- `quantization`
 
-如果你要新增可選模型，優先改這個檔案，而不是直接改 `app.py`。
+說明：
 
-### 1. ASR
-
-檔案：`services/asr_service.py`
-
-目前直接在這個 demo 內封裝 Breeze-ASR-25，參考：
-
-- `/home/r13922145/cool-course/all_courses/ocw_source/transcribe_breeze.py`
-
-如果你之後要改成：
-
-- import 既有函式
-- subprocess 呼叫既有腳本
-- HTTP service
-
-只需要改 `ASRService._transcribe_live()`，不用動 UI 與 pipeline。
-
-### 2. Summary
-
-檔案：`services/summary_service.py`
-
-目前預設：
-
-- OpenAI-compatible client
-- model 預設 `llama3.1-8b-instruct`
-- prompt 參考 `/home/r13922145/local-genai-edu/Pipeline.py`
-
-可用以下環境變數調整：
-
-```bash
-SUMMARY_BASE_URL=http://127.0.0.1:8001/v1
-SUMMARY_API_KEY=0
-SUMMARY_MODEL_NAME=llama3.1-8b-instruct
-```
-
-### 3. Quiz Model
-
-檔案：`services/quiz_service.py`
-
-目前預設：
-
-- OpenAI-compatible / vLLM endpoint
-- model name 預設 `grpo_v4.2`
-- prompt 參考：
-  - `/home/r13922145/local-genai-edu/2task_pipeline/full_question_generate/generate_full_questions.py`
-  - `/home/r13922145/local-genai-edu/2task_pipeline/continuation_generate/generate_continuation_options.py`
-
-你指定的 quiz adapter 路徑為：
-
-```bash
-/home/r13922145/rl_model/grpo_v4.2
-```
-
-此 adapter 的 base model 為：
-
-```bash
-unsloth/Llama-3.1-8B-Instruct
-```
-
-本 demo 不會直接修改或啟動你的既有模型程式；它只保留清楚對接點。
-
-可用以下環境變數調整：
-
-```bash
-QUIZ_BASE_URL=http://127.0.0.1:8000/v1
-QUIZ_API_KEY=0
-QUIZ_MODEL_NAME=grpo_v4.2
-QUIZ_MODEL_PATH=/home/r13922145/rl_model/grpo_v4.2
-QUIZ_BASE_MODEL_NAME=unsloth/Llama-3.1-8B-Instruct
-```
-
-自動啟動 server 相關的設定也可以透過環境變數覆蓋，例如：
-
-```bash
-AUTO_START_MODEL_SERVERS=1
-MODEL_SERVER_START_STRATEGY=sequential
-SUMMARY_SERVER_CONDA_ENV=vllm
-QUIZ_SERVER_CONDA_ENV=vllm
-SUMMARY_SERVER_MODEL=unsloth/Meta-Llama-3.1-8B-Instruct
-QUIZ_SERVER_MODEL=unsloth/Meta-Llama-3.1-8B-Instruct
-SUMMARY_SERVER_GPU_MEMORY_UTILIZATION=0.45
-QUIZ_SERVER_GPU_MEMORY_UTILIZATION=0.45
-```
-
-### 4. Embedding Retrieval
-
-檔案：`services/embedding_service.py`
-
-embedding 不再依賴啟動 `app.py` 的當前環境，而是固定透過子程序在指定 conda env 內執行：
-
-```bash
-ASR_CONDA_ENV=inference
-EMBEDDING_CONDA_ENV=inference
-EMBEDDING_MODEL_NAME=BAAI/bge-m3
-EMBEDDING_USE_FP16=1
-```
-
-如果你的 `FlagEmbedding` 安裝在 `cool`，就改成：
-
-```bash
-ASR_CONDA_ENV=cool
-EMBEDDING_CONDA_ENV=cool
-```
-
-## 使用方式
-
-### Input 優先順序
-
-1. 直接貼上的 transcript
-2. 上傳字幕檔 `.txt` / `.srt`
-3. 上傳影片檔，交由 ASR
-
-### Regenerate 行為
-
-- `Regenerate Quiz`
-  - 只重跑 quiz step
-  - 不重跑 ASR / summary / chunk / retrieval
-- `Regenerate Options Only`
-  - 保留現有題幹
-  - 只重生選項與答案
+- `server_conda_env` 現在可留空字串，表示直接使用 current runtime
+- `lora_path` 現在應指向 repo 內相對路徑，例如 `models/adapters/grpo_v4.2`
+- 若 `lora_path` 省略，代表直接使用 base model
 
 ## 測試
-
-目前附的是 fail-fast 測試與 fake service 測試：
 
 ```bash
 python -m unittest discover -s tests
 ```
 
+## 本地開發附錄
+
+如果你不想先用 Docker，本地也只需要單一環境，不再需要 `demo` / `inference` / `vllm` 三套 conda 切換。
+
+範例：
+
+```bash
+conda create -n demo python=3.10 -y
+conda activate demo
+pip install -r requirements.txt
+python app.py
+```
+
+本地模式同樣會把 Hugging Face cache 寫到 repo 內的 `models/cache/huggingface/`。
+
 ## 備註
 
-- 此專案只支援 `live` 模式。
-- 任一步驟失敗都會直接停在該 step，不會輸出 mock 或本地替代結果。
-- summary / quiz server 是否自動啟動，取決於 `AUTO_START_MODEL_SERVERS` 與 `MODEL_SERVER_START_STRATEGY`。
-- 本專案不會修改 `/home/r13922145/local-genai-edu` 或其他既有程式碼。
+- 這個專案是 demo workflow，不是 production service。
+- GPU 是必要條件；目前不支援 CPU-only 執行。
+- 不建議把實際模型權重提交到 Git；repo 已預設忽略 `models/adapters/` 與 `models/cache/` 內容。

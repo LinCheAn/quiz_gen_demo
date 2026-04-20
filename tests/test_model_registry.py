@@ -6,7 +6,11 @@ import unittest
 from pathlib import Path
 
 from utils.config import AppConfig
-from utils.model_registry import ModelRegistry, build_runtime_config
+from utils.model_registry import (
+    ModelRegistry,
+    build_runtime_config,
+    validate_model_selection_assets,
+)
 
 
 class ModelRegistryTest(unittest.TestCase):
@@ -22,7 +26,13 @@ class ModelRegistryTest(unittest.TestCase):
         self.assertEqual(runtime_config.summary_server_model, selection.summary.server_model)
         self.assertEqual(runtime_config.summary_model_path, selection.summary.lora_path)
         self.assertEqual(runtime_config.quiz_model_name, selection.quiz.model_name)
-        self.assertEqual(runtime_config.quiz_model_path, selection.quiz.lora_path)
+        if selection.quiz.lora_path is None:
+            self.assertIsNone(runtime_config.quiz_model_path)
+        else:
+            self.assertEqual(
+                runtime_config.quiz_model_path,
+                str((config.project_root / selection.quiz.lora_path).resolve()),
+            )
 
     def test_registry_allows_model_without_lora_path(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -40,7 +50,7 @@ class ModelRegistryTest(unittest.TestCase):
                                 "label": "Summary A",
                                 "model_name": "summary-a",
                                 "base_url": "http://127.0.0.1:8001/v1",
-                                "server_conda_env": "vllm",
+                                "server_conda_env": "",
                                 "server_model": "summary-server",
                                 "gpu_memory_utilization": 0.8,
                                 "max_model_len": 4096,
@@ -51,7 +61,7 @@ class ModelRegistryTest(unittest.TestCase):
                                 "label": "Quiz Base",
                                 "model_name": "quiz-base",
                                 "base_url": "http://127.0.0.1:8000/v1",
-                                "server_conda_env": "vllm",
+                                "server_conda_env": "",
                                 "server_model": "quiz-server",
                                 "gpu_memory_utilization": 0.7,
                                 "max_model_len": 4096,
@@ -87,9 +97,9 @@ class ModelRegistryTest(unittest.TestCase):
                                 "label": "Quiz A",
                                 "model_name": "quiz-a",
                                 "base_url": "http://127.0.0.1:8000/v1",
-                                "server_conda_env": "vllm",
+                                "server_conda_env": "",
                                 "server_model": "quiz-server",
-                                "lora_path": "/tmp/adapter",
+                                "lora_path": "models/adapters/quiz-a",
                                 "gpu_memory_utilization": 0.7,
                                 "max_model_len": 4096,
                                 "tensor_parallel_size": 1,
@@ -109,6 +119,29 @@ class ModelRegistryTest(unittest.TestCase):
 
         self.assertEqual(registry.summary_choices(), registry.quiz_choices())
         self.assertEqual(registry.summary_choices(), registry.model_choices())
+
+    def test_validate_model_selection_assets_raises_for_missing_relative_adapter(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            project_root = Path(tempdir)
+            config = AppConfig(project_root=project_root)
+            config.ensure_directories()
+            registry = ModelRegistry.load(Path(__file__).resolve().parents[1] / "model_info.json")
+            selection = registry.resolve_selection(quiz_model_id="grpo-v4.2")
+
+            with self.assertRaisesRegex(ValueError, "Missing model assets"):
+                validate_model_selection_assets(config, selection)
+
+    def test_validate_model_selection_assets_accepts_existing_relative_adapter(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            project_root = Path(tempdir)
+            adapter_dir = project_root / "models" / "adapters" / "grpo_v4.2"
+            adapter_dir.mkdir(parents=True, exist_ok=True)
+            config = AppConfig(project_root=project_root)
+            config.ensure_directories()
+            registry = ModelRegistry.load(Path(__file__).resolve().parents[1] / "model_info.json")
+            selection = registry.resolve_selection(quiz_model_id="grpo-v4.2")
+
+            validate_model_selection_assets(config, selection)
 
 
 if __name__ == "__main__":

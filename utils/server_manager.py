@@ -5,6 +5,7 @@ import json
 import os
 import signal
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from hashlib import sha1
@@ -16,7 +17,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import urlopen
 
-from utils.config import AppConfig
+from utils.config import AppConfig, describe_runtime_target
 
 
 ROLE_ORDER = {"summary": 0, "quiz": 1}
@@ -80,9 +81,6 @@ class ModelServerManager:
             print("AUTO_START_MODEL_SERVERS=0, skip starting summary/quiz servers.")
             return
 
-        if which("conda") is None:
-            raise RuntimeError("`conda` was not found in PATH, cannot auto-start model servers.")
-
         for process_key in dict.fromkeys(self._role_to_process_key[name] for name in ("summary", "quiz")):
             self._ensure_process_ready(process_key)
 
@@ -115,10 +113,9 @@ class ModelServerManager:
     def _ensure_process_ready(self, process_key: str) -> None:
         if not self.config.auto_start_model_servers:
             return
-        if which("conda") is None:
-            raise RuntimeError("`conda` was not found in PATH, cannot auto-start model servers.")
         self._register_atexit_if_needed()
         spec = self._process_specs[process_key]
+        self._assert_runtime_launcher_available(spec.conda_env)
         self._ensure_single_server_ready(spec)
 
     def _release_process(self, process_key: str) -> None:
@@ -242,14 +239,7 @@ class ModelServerManager:
         lora_modules = self._build_lora_modules(role_specs)
         served_model_name = base_aliases[0] if base_aliases else None
         command = [
-            "conda",
-            "run",
-            "--no-capture-output",
-            "-n",
-            primary.conda_env,
-            "vllm",
-            "serve",
-            primary.server_model,
+            *self._runtime_command(primary.conda_env, "vllm", "serve", primary.server_model),
         ]
         if lora_modules:
             command.append("--enable-lora")
@@ -423,24 +413,48 @@ class ModelServerManager:
 
     def _assert_cuda_available(self, conda_env: str, server_name: str) -> None:
         check = subprocess.run(
-            [
-                "conda",
-                "run",
-                "--no-capture-output",
-                "-n",
+            self._python_command(
                 conda_env,
-                "python",
                 "-c",
                 "import torch; raise SystemExit(0 if torch.cuda.is_available() else 1)",
-            ],
+            ),
             cwd=self.config.project_root,
             capture_output=True,
             text=True,
         )
         if check.returncode != 0:
             raise RuntimeError(
-                f"[{server_name}] No CUDA device is visible inside conda env `{conda_env}`. "
+                f"[{server_name}] No CUDA device is visible inside {describe_runtime_target(conda_env)}. "
                 "Auto-start currently assumes GPU-backed vLLM serving."
+            )
+
+    @staticmethod
+    def _runtime_command(runtime_env: str | None, *args: str) -> list[str]:
+        normalized = (runtime_env or "").strip()
+        if normalized:
+            return [
+                "conda",
+                "run",
+                "--no-capture-output",
+                "-n",
+                normalized,
+                *args,
+            ]
+        return list(args)
+
+    @classmethod
+    def _python_command(cls, runtime_env: str | None, *args: str) -> list[str]:
+        normalized = (runtime_env or "").strip()
+        if normalized:
+            return cls._runtime_command(normalized, "python", *args)
+        return [sys.executable, *args]
+
+    @staticmethod
+    def _assert_runtime_launcher_available(runtime_env: str | None) -> None:
+        normalized = (runtime_env or "").strip()
+        if normalized and which("conda") is None:
+            raise RuntimeError(
+                f"`conda` was not found in PATH, cannot launch {describe_runtime_target(normalized)}."
             )
 
     def _build_summary_spec(self) -> ManagedServerSpec:

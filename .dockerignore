@@ -1,12 +1,10 @@
+.git
+.codex
 __pycache__/
 *.py[cod]
 .pytest_cache/
-
 artifacts/
 data/uploads/
-models/adapters/*
-!models/adapters/.gitkeep
-models/cache/*
-!models/cache/.gitkeep
-
+models/
+tests/
 codex_gradio_demo_prompt.md

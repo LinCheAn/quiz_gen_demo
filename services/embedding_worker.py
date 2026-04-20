@@ -25,7 +25,7 @@ def main() -> int:
     try:
         from FlagEmbedding import FlagModel
     except ImportError as exc:
-        raise RuntimeError("FlagEmbedding package is required in the embedding conda environment") from exc
+        raise RuntimeError("FlagEmbedding package is required in the embedding runtime environment") from exc
 
     payload = json.load(sys.stdin)
     chunks = payload.get("chunks", [])

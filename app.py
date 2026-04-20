@@ -8,8 +8,12 @@ import gradio as gr
 import pandas as pd
 
 from services.pipeline_service import PipelineService
-from utils.config import load_config
-from utils.model_registry import ModelRegistry, build_runtime_config
+from utils.config import describe_runtime_target, load_config
+from utils.model_registry import (
+    ModelRegistry,
+    build_runtime_config,
+    validate_model_selection_assets,
+)
 from utils.server_manager import ModelServerManager
 from utils.schemas import ModelSelectionSnapshot, PipelineParameters, PipelineRunState, QuizResult
 from utils.ui_helpers import (
@@ -339,6 +343,10 @@ def build_service() -> PipelineService:
 
 
 def build_service_for_selection(selection: ModelSelectionSnapshot) -> PipelineService:
+    try:
+        validate_model_selection_assets(APP_CONFIG, selection)
+    except ValueError as exc:
+        raise gr.Error(str(exc)) from exc
     runtime_config = build_runtime_config(APP_CONFIG, selection)
     return PipelineService(
         runtime_config,
@@ -489,8 +497,8 @@ def build_demo() -> gr.Blocks:
             f"""
             `AUTO_START_MODEL_SERVERS={int(config.auto_start_model_servers)}`，
             啟動策略為 `{config.model_server_start_strategy}`，
-            ASR stage 在 conda env `{config.asr_conda_env or 'current'}` 執行，
-            embedding stage 在 conda env `{config.embedding_conda_env}` 執行。
+            ASR stage 在 {describe_runtime_target(config.asr_conda_env)} 執行，
+            embedding stage 在 {describe_runtime_target(config.embedding_conda_env)} 執行。
             模型選單路徑 `{config.model_info_path}`。
             """
         )
@@ -725,8 +733,9 @@ if __name__ == "__main__":
     config = APP_CONFIG.copy_with_overrides(
         app_port=runtime_args.port if runtime_args.port is not None else APP_CONFIG.app_port
     )
+    default_selection = APP_MODEL_REGISTRY.resolve_selection()
+    validate_model_selection_assets(config, default_selection)
     if config.auto_start_model_servers and config.model_server_start_strategy == "preload":
-        default_selection = APP_MODEL_REGISTRY.resolve_selection()
         preload_config = build_runtime_config(config, default_selection)
         ModelServerManager(preload_config).ensure_servers_ready()
     launch_port = find_available_port(config.app_host, config.app_port)

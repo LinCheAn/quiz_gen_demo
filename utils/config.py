@@ -35,30 +35,38 @@ def _env_bool(name: str, default: bool) -> bool:
     return value.strip().lower() not in {"0", "false", "no", "off"}
 
 
+def describe_runtime_target(env_name: str | None) -> str:
+    normalized = (env_name or "").strip()
+    if normalized:
+        return f"conda env `{normalized}`"
+    return "current runtime"
+
+
 @dataclass
 class AppConfig:
     project_root: Path = PROJECT_ROOT
     uploads_dir: Path | None = None
     runs_dir: Path | None = None
     artifacts_dir: Path | None = None
+    models_dir: Path | None = None
+    hf_home: Path | None = None
     model_info_path: Path | None = None
     default_mode: str = os.getenv("DEMO_DEFAULT_MODE", "live")
     asr_model_name: str = os.getenv("ASR_MODEL_NAME", "MediaTek-Research/Breeze-ASR-25")
     asr_chunk_length_s: int = _env_int("ASR_CHUNK_LENGTH_S", 30)
-    asr_conda_env: str = os.getenv("ASR_CONDA_ENV", "inference")
-    # summary_model_name: str = os.getenv("SUMMARY_MODEL_NAME", "Qwen/Qwen3.5-4B")
+    asr_conda_env: str = os.getenv("ASR_CONDA_ENV", "")
     summary_model_name: str = os.getenv("SUMMARY_MODEL_NAME", "Qwen/Qwen3.5-4B")
     summary_base_url: str = os.getenv("SUMMARY_BASE_URL", "http://127.0.0.1:8001/v1")
     summary_api_key: str = os.getenv("SUMMARY_API_KEY", os.getenv("OPENAI_API_KEY", "0"))
     summary_model_path: str | None = os.getenv("SUMMARY_MODEL_PATH")
     summary_base_model_name: str = os.getenv("SUMMARY_BASE_MODEL_NAME", "Qwen/Qwen3.5-4B")
     embedding_model_name: str = os.getenv("EMBEDDING_MODEL_NAME", "BAAI/bge-m3")
-    embedding_conda_env: str = os.getenv("EMBEDDING_CONDA_ENV", "inference")
+    embedding_conda_env: str = os.getenv("EMBEDDING_CONDA_ENV", "")
     embedding_use_fp16: bool = _env_bool("EMBEDDING_USE_FP16", True)
     quiz_model_name: str = os.getenv("QUIZ_MODEL_NAME", "grpo_v4.2")
     quiz_base_url: str = os.getenv("QUIZ_BASE_URL", "http://127.0.0.1:8000/v1")
     quiz_api_key: str = os.getenv("QUIZ_API_KEY", "0")
-    quiz_model_path: str | None = os.getenv("QUIZ_MODEL_PATH", "/home/r13922145/rl_model/grpo_v4.2")
+    quiz_model_path: str | None = os.getenv("QUIZ_MODEL_PATH")
     quiz_base_model_name: str = os.getenv("QUIZ_BASE_MODEL_NAME", "unsloth/Llama-3.1-8B-Instruct")
     quiz_question_count: int = _env_int("QUIZ_QUESTION_COUNT", 3)
     quiz_temperature: float = _env_float("QUIZ_TEMPERATURE", 0.7)
@@ -66,8 +74,8 @@ class AppConfig:
     auto_start_model_servers: bool = _env_bool("AUTO_START_MODEL_SERVERS", True)
     model_server_start_strategy: str = os.getenv("MODEL_SERVER_START_STRATEGY", "sequential")
     keep_model_servers_warm: bool = _env_bool("KEEP_MODEL_SERVERS_WARM", True)
-    summary_server_conda_env: str = os.getenv("SUMMARY_SERVER_CONDA_ENV", "vllm")
-    quiz_server_conda_env: str = os.getenv("QUIZ_SERVER_CONDA_ENV", "vllm")
+    summary_server_conda_env: str = os.getenv("SUMMARY_SERVER_CONDA_ENV", "")
+    quiz_server_conda_env: str = os.getenv("QUIZ_SERVER_CONDA_ENV", "")
     summary_server_model: str = os.getenv(
         "SUMMARY_SERVER_MODEL",
         # "Qwen/Qwen3.5-4B",
@@ -100,26 +108,45 @@ class AppConfig:
 
     def __post_init__(self) -> None:
         self.project_root = Path(self.project_root)
+        self.models_dir = Path(self.models_dir or self.project_root / "models")
+        self.hf_home = Path(self.hf_home or self.models_dir / "cache" / "huggingface")
         self.model_info_path = Path(self.model_info_path or self.project_root / "model_info.json")
         self.uploads_dir = Path(self.uploads_dir or self.project_root / "data" / "uploads")
         self.artifacts_dir = Path(self.artifacts_dir or self.project_root / "artifacts")
         self.runs_dir = Path(self.runs_dir or self.artifacts_dir / "runs")
         self.default_mode = "live"
+        self.asr_conda_env = self.asr_conda_env.strip()
+        self.embedding_conda_env = self.embedding_conda_env.strip()
+        self.summary_server_conda_env = self.summary_server_conda_env.strip()
+        self.quiz_server_conda_env = self.quiz_server_conda_env.strip()
         self.model_server_start_strategy = self.model_server_start_strategy.strip().lower()
         if self.model_server_start_strategy not in {"preload", "sequential"}:
             self.model_server_start_strategy = "sequential"
 
     def ensure_directories(self) -> None:
-        for path in (self.uploads_dir, self.artifacts_dir, self.runs_dir):
+        for path in (
+            self.models_dir,
+            self.hf_home,
+            self.uploads_dir,
+            self.artifacts_dir,
+            self.runs_dir,
+        ):
             path.mkdir(parents=True, exist_ok=True)
+
+    def apply_environment_defaults(self) -> None:
+        os.environ.setdefault("HF_HOME", str(self.hf_home))
+        os.environ.setdefault("HF_HUB_CACHE", str(self.hf_home / "hub"))
+        os.environ.setdefault("TRANSFORMERS_CACHE", str(self.hf_home / "transformers"))
 
     def copy_with_overrides(self, **overrides: object) -> "AppConfig":
         config = replace(self, **overrides)
         config.ensure_directories()
+        config.apply_environment_defaults()
         return config
 
 
 def load_config() -> AppConfig:
     config = AppConfig()
     config.ensure_directories()
+    config.apply_environment_defaults()
     return config
