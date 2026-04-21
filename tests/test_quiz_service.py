@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from services.quiz_service import QuizService
 from utils.config import AppConfig
@@ -14,6 +15,13 @@ class QuizServiceTest(unittest.TestCase):
         tempdir = tempfile.TemporaryDirectory()
         self.addCleanup(tempdir.cleanup)
         config = AppConfig(project_root=Path(tempdir.name))
+        config.ensure_directories()
+        return QuizService(config)
+
+    def _build_transformers_service(self) -> QuizService:
+        tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(tempdir.cleanup)
+        config = AppConfig(project_root=Path(tempdir.name), inference_backend="transformers")
         config.ensure_directories()
         return QuizService(config)
 
@@ -267,6 +275,51 @@ class QuizServiceTest(unittest.TestCase):
         self.assertEqual(captured_indices, [1, 2])
         self.assertEqual([question.question for question in questions], ["Question 1", "Question 2"])
         self.assertEqual([item["question_index"] for item in raw_responses], [1, 2])
+
+    def test_generate_quiz_with_transformers_backend(self) -> None:
+        service = self._build_transformers_service()
+
+        class _FakeBackend:
+            def __init__(self, config, *, role: str) -> None:
+                self.config = config
+                self.role = role
+
+            def generate(self, **kwargs) -> str:
+                return (
+                    '{"question": [{"question": "What is alpha?", "options": '
+                    '{"A": "A1", "B": "B1", "C": "C1", "D": "D1"}, "answer": "A"}]}'
+                )
+
+        with patch("services.quiz_service.TransformersTextGenerationBackend", _FakeBackend):
+            result = service.generate_quiz(["alpha"], question_count=1)
+
+        self.assertEqual(len(result.questions), 1)
+        self.assertEqual(result.questions[0].question, "What is alpha?")
+        self.assertEqual(result.questions[0].answer, "A")
+
+    def test_request_completion_with_transformers_backend_uses_assistant_prefix(self) -> None:
+        service = self._build_transformers_service()
+        captured: dict[str, object] = {}
+
+        class _FakeBackend:
+            def __init__(self, config, *, role: str) -> None:
+                self.config = config
+                self.role = role
+
+            def generate(self, **kwargs) -> str:
+                captured.update(kwargs)
+                return '"options": {"A": "A1", "B": "B1", "C": "C1", "D": "D1"}, "answer": "A"}]}'
+
+        with patch("services.quiz_service.TransformersTextGenerationBackend", _FakeBackend):
+            result = service._request_completion(
+                None,
+                prompt="unused",
+                messages=[{"role": "system", "content": "sys"}, {"role": "user", "content": "prompt"}],
+                assistant_prefix='{"question": [',
+            )
+
+        self.assertIn('"answer": "A"', result)
+        self.assertEqual(captured["assistant_prefix"], '{"question": [')
 
 
 if __name__ == "__main__":

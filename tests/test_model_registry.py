@@ -126,6 +126,27 @@ class ModelRegistryTest(unittest.TestCase):
         self.assertEqual(registry.summary_choices(), registry.quiz_choices())
         self.assertEqual(registry.summary_choices(), registry.model_choices())
 
+    def test_backend_filtered_choices_only_return_compatible_models(self) -> None:
+        registry = ModelRegistry.load(Path(__file__).resolve().parents[1] / "model_info.json")
+
+        transformers_choices = registry.summary_choices("transformers")
+        vllm_choices = registry.summary_choices("vllm")
+
+        self.assertTrue(transformers_choices)
+        self.assertTrue(vllm_choices)
+        self.assertTrue(all("-tf-" in model_id for _, model_id in transformers_choices))
+        self.assertTrue(all("-tf-" not in model_id for _, model_id in vllm_choices))
+
+    def test_resolve_selection_for_backend_falls_back_to_backend_compatible_defaults(self) -> None:
+        registry = ModelRegistry.load(Path(__file__).resolve().parents[1] / "model_info.json")
+
+        selection = registry.resolve_selection_for_backend("transformers")
+
+        self.assertIn("transformers", selection.summary.supported_backends)
+        self.assertIn("transformers", selection.quiz.supported_backends)
+        self.assertEqual(selection.summary.id, "llama-3.1-8b-instruct-tf-8bit")
+        self.assertEqual(selection.quiz.id, "llama-3.1-8b-instruct-tf-8bit")
+
     def test_validate_model_selection_assets_raises_for_missing_relative_adapter(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             project_root = Path(tempdir)
@@ -150,6 +171,17 @@ class ModelRegistryTest(unittest.TestCase):
             selection = registry.resolve_selection(quiz_model_id="grpo-v4.2")
 
             validate_model_selection_assets(config, selection)
+
+    def test_validate_model_selection_assets_rejects_backend_incompatible_preset(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            project_root = Path(tempdir)
+            config = AppConfig(project_root=project_root, inference_backend="transformers")
+            config.ensure_directories()
+            registry = ModelRegistry.load(Path(__file__).resolve().parents[1] / "model_info.json")
+            selection = registry.resolve_selection(quiz_model_id="grpo-v4.2-fp8")
+
+            with self.assertRaisesRegex(ValueError, "does not support inference backend `transformers`"):
+                validate_model_selection_assets(config, selection)
 
 
 if __name__ == "__main__":

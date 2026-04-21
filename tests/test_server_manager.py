@@ -16,7 +16,10 @@ class ServerManagerTest(unittest.TestCase):
             config = AppConfig(project_root=Path(tempdir))
             config.ensure_directories()
             registry = ModelRegistry.load(Path(__file__).resolve().parents[1] / "model_info.json")
-            selection = registry.resolve_selection(quiz_model_id="grpo-v4.2")
+            selection = registry.resolve_selection(
+                summary_model_id="qwen3.5-4b",
+                quiz_model_id="grpo-v4.2",
+            )
             runtime_config = build_runtime_config(config, selection)
             manager = ModelServerManager(runtime_config)
 
@@ -29,8 +32,7 @@ class ServerManagerTest(unittest.TestCase):
             self.assertEqual(runtime_config.model_server_start_strategy, "sequential")
             summary_command = " ".join(summary.command)
             self.assertIn(selection.summary.model_name, summary_command)
-            self.assertIn(str((Path(tempdir) / selection.summary.lora_path).resolve()), summary_command)
-            self.assertIn("--enable-lora", summary.command)
+            self.assertNotIn("--enable-lora", summary.command)
             quiz_command = " ".join(quiz.command)
             self.assertIn(selection.quiz.model_name, quiz_command)
             self.assertIn(str((Path(tempdir) / selection.quiz.lora_path).resolve()), quiz_command)

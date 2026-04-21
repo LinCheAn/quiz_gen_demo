@@ -667,6 +667,8 @@ class PipelineService:
     def _prepare_server_for_step(self, mode: str, step_key: str) -> None:
         if mode != "live" or self.server_manager is None:
             return
+        if self.config.inference_backend != "vllm":
+            return
         if not self.config.auto_start_model_servers:
             return
         if step_key not in {"summary", "quiz"}:
@@ -675,6 +677,8 @@ class PipelineService:
 
     def _release_server_after_step(self, mode: str, step_key: str) -> None:
         if mode != "live" or self.server_manager is None:
+            return
+        if self.config.inference_backend != "vllm":
             return
         if not self.config.auto_start_model_servers:
             return
@@ -688,6 +692,8 @@ class PipelineService:
 
     def _cleanup_managed_servers(self, mode: str) -> None:
         if mode != "live" or self.server_manager is None:
+            return
+        if self.config.inference_backend != "vllm":
             return
         if not self.config.auto_start_model_servers:
             return

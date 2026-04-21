@@ -220,6 +220,7 @@ class PipelineServiceTest(unittest.TestCase):
                 tensor_parallel_size=1,
                 dtype="bfloat16",
                 quantization="fp8",
+                supported_backends=["vllm", "transformers"],
             ),
             quiz=QuizModelPreset(
                 id="quiz-test",
@@ -233,6 +234,7 @@ class PipelineServiceTest(unittest.TestCase):
                 max_model_len=8192,
                 tensor_parallel_size=1,
                 dtype="bfloat16",
+                supported_backends=["vllm", "transformers"],
             ),
         )
 
@@ -649,6 +651,38 @@ class PipelineServiceTest(unittest.TestCase):
                     ("cleanup", "all"),
                 ],
             )
+
+    def test_transformers_backend_skips_server_manager_lifecycle(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            config = AppConfig(
+                project_root=Path(tempdir),
+                inference_backend="transformers",
+            )
+            config.auto_start_model_servers = True
+            config.model_server_start_strategy = "sequential"
+            config.ensure_directories()
+            fake_manager = FakeServerManager()
+            service = SequentialPipelineService(config, fake_manager)
+            parameters = PipelineParameters(
+                inference_backend="transformers",
+                n_keywords=2,
+                top_k=1,
+                chunk_size=80,
+                chunk_overlap=10,
+            )
+
+            states = list(
+                service.stream_pipeline(
+                    mode="live",
+                    parameters=parameters,
+                    video_path=None,
+                    transcript_text="Binary search tree example.",
+                    subtitle_path=None,
+                )
+            )
+
+            self.assertEqual(states[-1].steps["quiz"].status, "completed")
+            self.assertEqual(fake_manager.events, [])
 
     def test_parse_failure_logs_raw_response(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:

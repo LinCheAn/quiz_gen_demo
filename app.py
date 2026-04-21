@@ -30,6 +30,7 @@ DEFAULT_QUIZ_MARKDOWN = "尚未產生題目。"
 INPUT_MODE_VIDEO = "video"
 INPUT_MODE_TRANSCRIPT = "manual_transcript"
 INPUT_MODE_SUBTITLE = "subtitle_file"
+INFERENCE_BACKEND_CHOICES = [("vLLM", "vllm"), ("Transformers", "transformers")]
 STATUS_TABLE_HEADERS = ["Step", "Status", "Message", "Artifact"]
 STATUS_ROW_STYLES = {
     "pending": "background-color: #f3f4f6; color: #374151;",
@@ -115,10 +116,15 @@ def resolve_quiz_results(state: PipelineRunState) -> list[QuizResult]:
 def resolve_state_model_selection(state: PipelineRunState) -> ModelSelectionSnapshot:
     if state.selected_models is not None:
         return state.selected_models
-    return APP_MODEL_REGISTRY.resolve_selection(
+    return APP_MODEL_REGISTRY.resolve_selection_for_backend(
+        resolve_state_inference_backend(state),
         state.parameters.summary_model_id,
         state.parameters.quiz_model_id,
     )
+
+
+def resolve_state_inference_backend(state: PipelineRunState) -> str:
+    return (state.parameters.inference_backend or APP_CONFIG.inference_backend).strip().lower() or "vllm"
 
 
 def resolve_state_asr_preset_id(state: PipelineRunState) -> str:
@@ -135,6 +141,7 @@ def format_run_info(state: PipelineRunState) -> dict[str, Any]:
         "input_filename": state.input_filename,
         "parameters": state.parameters.model_dump(mode="json"),
         "quiz_generation_count": state.quiz_generation_count,
+        "inference_backend": resolve_state_inference_backend(state),
         "summary_model_id": model_selection.summary.id,
         "quiz_versions_available": len(resolve_quiz_results(state)),
         "asr_preset_id": asr_preset.id,
@@ -345,24 +352,27 @@ def render_regeneration_outputs(
 
 
 def build_service() -> PipelineService:
-    default_selection = APP_MODEL_REGISTRY.resolve_selection()
-    return build_service_for_selection(APP_CONFIG.asr_preset_id, default_selection)
+    default_selection = APP_MODEL_REGISTRY.resolve_selection_for_backend(APP_CONFIG.inference_backend)
+    return build_service_for_selection(APP_CONFIG.inference_backend, APP_CONFIG.asr_preset_id, default_selection)
 
 
 def build_service_for_selection(
+    inference_backend: str,
     asr_preset_id: str,
     selection: ModelSelectionSnapshot,
 ) -> PipelineService:
+    base_runtime_config = APP_CONFIG.copy_with_overrides(
+        inference_backend=inference_backend,
+        asr_preset_id=asr_preset_id,
+        asr_backend="",
+        asr_model_name="",
+    )
     try:
-        validate_model_selection_assets(APP_CONFIG, selection)
+        validate_model_selection_assets(base_runtime_config, selection)
     except ValueError as exc:
         raise gr.Error(str(exc)) from exc
     runtime_config = build_runtime_config(
-        APP_CONFIG.copy_with_overrides(
-            asr_preset_id=asr_preset_id,
-            asr_backend="",
-            asr_model_name="",
-        ),
+        base_runtime_config,
         selection,
     )
     return PipelineService(
@@ -383,6 +393,7 @@ def run_pipeline_ui(
     chunk_overlap: int,
     quiz_question_count: int,
     quiz_variant_count: int,
+    inference_backend: str,
     asr_preset_id: str,
     summary_model_id: str,
     quiz_model_id: str,
@@ -398,14 +409,19 @@ def run_pipeline_ui(
         top_k=top_k,
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
+        inference_backend=inference_backend,
         quiz_question_count=quiz_question_count,
         quiz_variant_count=quiz_variant_count,
         asr_preset_id=asr_preset_id,
         summary_model_id=summary_model_id,
         quiz_model_id=quiz_model_id,
     )
-    selection = APP_MODEL_REGISTRY.resolve_selection(summary_model_id, quiz_model_id)
-    service = build_service_for_selection(asr_preset_id, selection)
+    selection = APP_MODEL_REGISTRY.resolve_selection_for_backend(
+        inference_backend,
+        summary_model_id,
+        quiz_model_id,
+    )
+    service = build_service_for_selection(inference_backend, asr_preset_id, selection)
 
     is_first_yield = True
     for state in service.stream_pipeline(
@@ -430,6 +446,7 @@ def regenerate_ui(
 
     state = PipelineRunState.model_validate(state_payload)
     service = build_service_for_selection(
+        resolve_state_inference_backend(state),
         resolve_state_asr_preset_id(state),
         resolve_state_model_selection(state),
     )
@@ -455,6 +472,7 @@ def run_rag_ui(
 
     state = PipelineRunState.model_validate(state_payload)
     service = build_service_for_selection(
+        resolve_state_inference_backend(state),
         resolve_state_asr_preset_id(state),
         resolve_state_model_selection(state),
     )
@@ -475,6 +493,7 @@ def regenerate_keywords_ui(state_payload: dict | None):
 
     state = PipelineRunState.model_validate(state_payload)
     service = build_service_for_selection(
+        resolve_state_inference_backend(state),
         resolve_state_asr_preset_id(state),
         resolve_state_model_selection(state),
     )
@@ -511,7 +530,7 @@ def regenerate_options_only_ui(
 
 def build_demo() -> gr.Blocks:
     config = APP_CONFIG
-    default_selection = APP_MODEL_REGISTRY.resolve_selection()
+    default_selection = APP_MODEL_REGISTRY.resolve_selection_for_backend(config.inference_backend)
 
     with gr.Blocks(title="Video Quiz Generation Demo") as demo:
         gr.HTML(f"<style>{QUIZ_OUTPUT_CSS}</style>")
@@ -525,6 +544,7 @@ def build_demo() -> gr.Blocks:
             f"""
             `AUTO_START_MODEL_SERVERS={int(config.auto_start_model_servers)}`，
             啟動策略為 `{config.model_server_start_strategy}`，
+            文字生成 backend 預設為 `{config.inference_backend}`，
             預設 ASR preset 為 `{config.asr_preset_id}`，
             ASR stage 在 {describe_runtime_target(config.asr_conda_env)} 執行，
             embedding stage 在 {describe_runtime_target(config.embedding_conda_env)} 執行。
@@ -577,18 +597,23 @@ def build_demo() -> gr.Blocks:
                     step=1,
                     label="Number of Quiz Variants",
                 )
+                inference_backend_input = gr.Dropdown(
+                    choices=INFERENCE_BACKEND_CHOICES,
+                    value=config.inference_backend,
+                    label="Inference Backend",
+                )
                 asr_preset_input = gr.Dropdown(
                     choices=config.asr_choices(),
                     value=config.asr_preset_id,
                     label="ASR Preset",
                 )
                 summary_model_input = gr.Dropdown(
-                    choices=APP_MODEL_REGISTRY.summary_choices(),
+                    choices=APP_MODEL_REGISTRY.summary_choices(config.inference_backend),
                     value=default_selection.summary.id,
                     label="Summary Model",
                 )
                 quiz_model_input = gr.Dropdown(
-                    choices=APP_MODEL_REGISTRY.quiz_choices(),
+                    choices=APP_MODEL_REGISTRY.quiz_choices(config.inference_backend),
                     value=default_selection.quiz.id,
                     label="Quiz Model",
                 )
@@ -596,6 +621,12 @@ def build_demo() -> gr.Blocks:
         video_tab.select(fn=lambda: INPUT_MODE_VIDEO, outputs=[input_mode_state])
         transcript_tab.select(fn=lambda: INPUT_MODE_TRANSCRIPT, outputs=[input_mode_state])
         subtitle_tab.select(fn=lambda: INPUT_MODE_SUBTITLE, outputs=[input_mode_state])
+        inference_backend_input.change(
+            fn=refresh_model_dropdowns_for_backend,
+            inputs=[inference_backend_input, summary_model_input, quiz_model_input],
+            outputs=[summary_model_input, quiz_model_input],
+            show_progress="hidden",
+        )
 
         gr.Markdown("## Pipeline Status")
         progress_output = gr.HTML(value=PROGRESS_IDLE_HTML, label="Pipeline Progress")
@@ -699,6 +730,7 @@ def build_demo() -> gr.Blocks:
                 chunk_overlap_input,
                 quiz_question_count_input,
                 quiz_variant_count_input,
+                inference_backend_input,
                 asr_preset_input,
                 summary_model_input,
                 quiz_model_input,
@@ -738,6 +770,28 @@ def build_demo() -> gr.Blocks:
     return demo
 
 
+def refresh_model_dropdowns_for_backend(
+    inference_backend: str,
+    summary_model_id: str | None,
+    quiz_model_id: str | None,
+):
+    selection = APP_MODEL_REGISTRY.resolve_selection_for_backend(
+        inference_backend,
+        summary_model_id,
+        quiz_model_id,
+    )
+    return (
+        gr.Dropdown(
+            choices=APP_MODEL_REGISTRY.summary_choices(inference_backend),
+            value=selection.summary.id,
+        ),
+        gr.Dropdown(
+            choices=APP_MODEL_REGISTRY.quiz_choices(inference_backend),
+            value=selection.quiz.id,
+        ),
+    )
+
+
 def find_available_port(host: str, start_port: int, max_attempts: int = 20) -> int:
     bind_host = host or "0.0.0.0"
     for port in range(start_port, start_port + max_attempts):
@@ -768,9 +822,13 @@ if __name__ == "__main__":
     config = APP_CONFIG.copy_with_overrides(
         app_port=runtime_args.port if runtime_args.port is not None else APP_CONFIG.app_port
     )
-    default_selection = APP_MODEL_REGISTRY.resolve_selection()
+    default_selection = APP_MODEL_REGISTRY.resolve_selection_for_backend(config.inference_backend)
     validate_model_selection_assets(config, default_selection)
-    if config.auto_start_model_servers and config.model_server_start_strategy == "preload":
+    if (
+        config.inference_backend == "vllm"
+        and config.auto_start_model_servers
+        and config.model_server_start_strategy == "preload"
+    ):
         preload_config = build_runtime_config(config, default_selection)
         ModelServerManager(preload_config).ensure_servers_ready()
     launch_port = find_available_port(config.app_host, config.app_port)

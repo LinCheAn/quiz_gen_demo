@@ -47,14 +47,14 @@ class ModelRegistry:
                 f"Default quiz model `{self.defaults.quiz_model_id}` not found in {self.path}"
             )
 
-    def summary_choices(self) -> list[tuple[str, str]]:
-        return self.model_choices()
+    def quiz_choices(self, inference_backend: str | None = None) -> list[tuple[str, str]]:
+        return self.model_choices(inference_backend)
 
-    def quiz_choices(self) -> list[tuple[str, str]]:
-        return self.model_choices()
+    def summary_choices(self, inference_backend: str | None = None) -> list[tuple[str, str]]:
+        return self.model_choices(inference_backend)
 
-    def model_choices(self) -> list[tuple[str, str]]:
-        return [(item.label, item.id) for item in self.models]
+    def model_choices(self, inference_backend: str | None = None) -> list[tuple[str, str]]:
+        return [(item.label, item.id) for item in self._models_for_backend(inference_backend)]
 
     def resolve_selection(
         self,
@@ -73,6 +73,69 @@ class ModelRegistry:
             raise ValueError(f"Unknown quiz model id: {resolved_quiz_id}") from exc
         return ModelSelectionSnapshot(summary=summary, quiz=quiz)
 
+    def resolve_selection_for_backend(
+        self,
+        inference_backend: str,
+        summary_model_id: str | None = None,
+        quiz_model_id: str | None = None,
+    ) -> ModelSelectionSnapshot:
+        resolved_summary_id = self.resolve_model_id_for_backend(
+            inference_backend,
+            summary_model_id,
+            preferred_id=self.defaults.summary_model_id,
+        )
+        resolved_quiz_id = self.resolve_model_id_for_backend(
+            inference_backend,
+            quiz_model_id,
+            preferred_id=self.defaults.quiz_model_id,
+        )
+        return self.resolve_selection(resolved_summary_id, resolved_quiz_id)
+
+    def resolve_model_id_for_backend(
+        self,
+        inference_backend: str,
+        model_id: str | None,
+        *,
+        preferred_id: str,
+    ) -> str:
+        candidate_ids = [item.id for item in self._models_for_backend(inference_backend)]
+        if not candidate_ids:
+            raise ValueError(f"No models support inference backend `{inference_backend}`")
+
+        requested_id = (model_id or "").strip()
+        if requested_id:
+            preset = self._models_by_id.get(requested_id)
+            if preset is not None and inference_backend in preset.supported_backends:
+                return requested_id
+            related_requested_id = self._find_related_backend_model_id(candidate_ids, requested_id)
+            if related_requested_id is not None:
+                return related_requested_id
+
+        preferred = self._models_by_id.get(preferred_id)
+        if preferred is not None and inference_backend in preferred.supported_backends:
+            return preferred_id
+        related_preferred_id = self._find_related_backend_model_id(candidate_ids, preferred_id)
+        if related_preferred_id is not None:
+            return related_preferred_id
+        return candidate_ids[0]
+
+    def _models_for_backend(self, inference_backend: str | None) -> list[ModelPreset]:
+        if not inference_backend:
+            return list(self.models)
+        return [
+            item
+            for item in self.models
+            if inference_backend in item.supported_backends
+        ]
+
+    @staticmethod
+    def _find_related_backend_model_id(candidate_ids: list[str], model_id: str) -> str | None:
+        prefix = f"{model_id}-"
+        for candidate_id in candidate_ids:
+            if candidate_id.startswith(prefix):
+                return candidate_id
+        return None
+
 
 def resolve_project_path(project_root: Path, path_value: str | None) -> str | None:
     if not path_value:
@@ -86,6 +149,11 @@ def resolve_project_path(project_root: Path, path_value: str | None) -> str | No
 def validate_model_selection_assets(config: AppConfig, selection: ModelSelectionSnapshot) -> None:
     missing_assets: list[str] = []
     for role_name, preset in (("summary", selection.summary), ("quiz", selection.quiz)):
+        if config.inference_backend not in preset.supported_backends:
+            raise ValueError(
+                f"Selected {role_name} preset `{preset.id}` does not support "
+                f"inference backend `{config.inference_backend}`."
+            )
         resolved_path = resolve_project_path(config.project_root, preset.lora_path)
         if resolved_path is None:
             continue
@@ -106,12 +174,14 @@ def validate_model_selection_assets(config: AppConfig, selection: ModelSelection
 
 def build_runtime_config(base_config: AppConfig, selection: ModelSelectionSnapshot) -> AppConfig:
     return base_config.copy_with_overrides(
+        inference_backend=base_config.inference_backend,
         summary_model_name=selection.summary.model_name,
         summary_base_url=selection.summary.base_url,
         summary_server_conda_env=(selection.summary.server_conda_env or "").strip(),
         summary_server_model=selection.summary.server_model,
         summary_model_path=resolve_project_path(base_config.project_root, selection.summary.lora_path),
         summary_base_model_name=selection.summary.server_model,
+        summary_transformers_quantization=selection.summary.transformers_quantization,
         summary_server_gpu_memory_utilization=selection.summary.gpu_memory_utilization,
         summary_server_max_model_len=selection.summary.max_model_len,
         summary_server_tensor_parallel_size=selection.summary.tensor_parallel_size,
@@ -121,6 +191,7 @@ def build_runtime_config(base_config: AppConfig, selection: ModelSelectionSnapsh
         quiz_base_url=selection.quiz.base_url,
         quiz_model_path=resolve_project_path(base_config.project_root, selection.quiz.lora_path),
         quiz_base_model_name=selection.quiz.server_model,
+        quiz_transformers_quantization=selection.quiz.transformers_quantization,
         quiz_server_conda_env=(selection.quiz.server_conda_env or "").strip(),
         quiz_server_model=selection.quiz.server_model,
         quiz_server_gpu_memory_utilization=selection.quiz.gpu_memory_utilization,

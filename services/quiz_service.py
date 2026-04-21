@@ -9,6 +9,7 @@ from services.summary_service import (
     endpoint_client_hint,
     endpoint_runtime_hint,
 )
+from services.transformers_backend import TransformersTextGenerationBackend
 from utils.config import AppConfig
 from utils.errors import ModelResponseFormatError
 from utils.schemas import QuizQuestion, QuizResult
@@ -85,15 +86,16 @@ class QuizService:
     ) -> QuizResult:
         del variant
 
-        try:
-            from openai import OpenAI
-        except ImportError as exc:
-            raise RuntimeError("openai package is required for live quiz mode") from exc
-
         if not context_chunks:
             raise ValueError("context_chunks must not be empty")
 
-        client = OpenAI(api_key=self.config.quiz_api_key, base_url=self.config.quiz_base_url)
+        client = None
+        if self.config.inference_backend == "vllm":
+            try:
+                from openai import OpenAI
+            except ImportError as exc:
+                raise RuntimeError("openai package is required for live quiz mode") from exc
+            client = OpenAI(api_key=self.config.quiz_api_key, base_url=self.config.quiz_base_url)
         references = self._format_reference_paragraphs(context_chunks)
 
         if options_only_for:
@@ -254,6 +256,10 @@ class QuizService:
         question_index: int,
     ) -> tuple[QuizQuestion, dict[str, Any]]:
         assistant_prefix = self._build_assistant_prefix(existing_question_text)
+        messages = [
+            {"role": "system", "content": self.FULL_QUESTION_SYSTEM_MESSAGE},
+            {"role": "user", "content": prompt},
+        ]
         formatted_prompt = self._format_llama3_prompt(
             self.FULL_QUESTION_SYSTEM_MESSAGE,
             prompt,
@@ -261,18 +267,26 @@ class QuizService:
         )
         request_payload = {
             "model": self.config.quiz_model_name,
-            "prompt": formatted_prompt,
+            "messages": messages,
+            "assistant_prefix": assistant_prefix,
             "temperature": self.config.quiz_temperature,
             "max_tokens": 2048,
             "stop": ["<|eot_id|>"],
         }
+        if self.config.inference_backend == "vllm":
+            request_payload["prompt"] = formatted_prompt
         attempts: list[dict[str, Any]] = []
 
         for retry_idx in range(1, 4):
             continuation_text = ""
             complete_response = assistant_prefix
             try:
-                continuation_text = self._request_completion(client, formatted_prompt)
+                continuation_text = self._request_completion(
+                    client,
+                    prompt=formatted_prompt,
+                    messages=messages,
+                    assistant_prefix=assistant_prefix,
+                )
                 complete_response = assistant_prefix + continuation_text
                 question = self._parse_reference_question_response(
                     complete_response,
@@ -307,6 +321,20 @@ class QuizService:
         client: Any,
         messages: list[dict[str, str]],
     ) -> str:
+        if self.config.inference_backend == "transformers":
+            backend = TransformersTextGenerationBackend(self.config, role="quiz")
+            try:
+                return backend.generate(
+                    messages=messages,
+                    temperature=self.config.quiz_temperature,
+                    max_new_tokens=1024,
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    "Failed to generate quiz output with transformers backend "
+                    f"for model {self.config.quiz_model_name}. Original error: {exc}"
+                ) from exc
+
         try:
             response = client.chat.completions.create(
                 model=self.config.quiz_model_name,
@@ -327,7 +355,26 @@ class QuizService:
         self,
         client: Any,
         prompt: str,
+        *,
+        messages: list[dict[str, str]],
+        assistant_prefix: str,
     ) -> str:
+        if self.config.inference_backend == "transformers":
+            backend = TransformersTextGenerationBackend(self.config, role="quiz")
+            try:
+                return backend.generate(
+                    messages=messages,
+                    assistant_prefix=assistant_prefix,
+                    temperature=self.config.quiz_temperature,
+                    max_new_tokens=2048,
+                    stop_strings=["<|eot_id|>"],
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    "Failed to continue quiz generation with transformers backend "
+                    f"for model {self.config.quiz_model_name}. Original error: {exc}"
+                ) from exc
+
         try:
             response = client.completions.create(
                 model=self.config.quiz_model_name,

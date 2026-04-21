@@ -15,7 +15,36 @@
       "max_model_len": 32768,
       "tensor_parallel_size": 1,
       "dtype": "bfloat16",
-      "quantization": null
+      "quantization": null,
+      "supported_backends": ["vllm"]
+    },
+    {
+      "id": "qwen3.5-4b-tf-8bit",
+      "label": "Qwen 3.5 4B Transformers 8-bit",
+      "model_name": "Qwen/Qwen3.5-4B",
+      "base_url": "http://127.0.0.1:8000/v1",
+      "server_conda_env": "",
+      "server_model": "Qwen/Qwen3.5-4B",
+      "gpu_memory_utilization": 0.9,
+      "max_model_len": 32768,
+      "tensor_parallel_size": 1,
+      "dtype": "bfloat16",
+      "supported_backends": ["transformers"],
+      "transformers_quantization": "bitsandbytes-8bit"
+    },
+    {
+      "id": "qwen3.5-4b-tf-4bit",
+      "label": "Qwen 3.5 4B Transformers 4-bit",
+      "model_name": "Qwen/Qwen3.5-4B",
+      "base_url": "http://127.0.0.1:8000/v1",
+      "server_conda_env": "",
+      "server_model": "Qwen/Qwen3.5-4B",
+      "gpu_memory_utilization": 0.9,
+      "max_model_len": 32768,
+      "tensor_parallel_size": 1,
+      "dtype": "bfloat16",
+      "supported_backends": ["transformers"],
+      "transformers_quantization": "bitsandbytes-4bit"
     },
     {
       "id": "grpo-v4.2",
@@ -28,7 +57,38 @@
       "gpu_memory_utilization": 0.8,
       "max_model_len": 16384,
       "tensor_parallel_size": 1,
-      "dtype": "bfloat16"
+      "dtype": "bfloat16",
+      "supported_backends": ["vllm"]
+    },
+    {
+      "id": "grpo-v4.2-tf-8bit",
+      "label": "GRPO v4.2 Transformers 8-bit",
+      "model_name": "grpo_v4.2",
+      "base_url": "http://127.0.0.1:8000/v1",
+      "server_conda_env": "",
+      "server_model": "unsloth/Meta-Llama-3.1-8B-Instruct",
+      "lora_path": "models/adapters/grpo_v4.2",
+      "gpu_memory_utilization": 0.8,
+      "max_model_len": 16384,
+      "tensor_parallel_size": 1,
+      "dtype": "bfloat16",
+      "supported_backends": ["transformers"],
+      "transformers_quantization": "bitsandbytes-8bit"
+    },
+    {
+      "id": "grpo-v4.2-tf-4bit",
+      "label": "GRPO v4.2 Transformers 4-bit",
+      "model_name": "grpo_v4.2",
+      "base_url": "http://127.0.0.1:8000/v1",
+      "server_conda_env": "",
+      "server_model": "unsloth/Meta-Llama-3.1-8B-Instruct",
+      "lora_path": "models/adapters/grpo_v4.2",
+      "gpu_memory_utilization": 0.8,
+      "max_model_len": 16384,
+      "tensor_parallel_size": 1,
+      "dtype": "bfloat16",
+      "supported_backends": ["transformers"],
+      "transformers_quantization": "bitsandbytes-4bit"
     },
     {
       "id": "grpo-v4.2-fp8",
@@ -42,7 +102,8 @@
       "max_model_len": 32768,
       "tensor_parallel_size": 1,
       "dtype": "bfloat16",
-      "quantization": "fp8"
+      "quantization": "fp8",
+      "supported_backends": ["vllm"]
     },
     {
       "id": "dpo-v9.3-ocw",
@@ -55,7 +116,38 @@
       "gpu_memory_utilization": 0.8,
       "max_model_len": 16384,
       "tensor_parallel_size": 1,
-      "dtype": "bfloat16"
+      "dtype": "bfloat16",
+      "supported_backends": ["vllm"]
+    },
+    {
+      "id": "dpo-v9.3-ocw-tf-8bit",
+      "label": "DPO v9.3 OCW Transformers 8-bit",
+      "model_name": "dpo_v9.3_ocw",
+      "base_url": "http://127.0.0.1:8000/v1",
+      "server_conda_env": "",
+      "server_model": "unsloth/Meta-Llama-3.1-8B-Instruct",
+      "lora_path": "models/adapters/dpo_v9.3_ocw",
+      "gpu_memory_utilization": 0.8,
+      "max_model_len": 16384,
+      "tensor_parallel_size": 1,
+      "dtype": "bfloat16",
+      "supported_backends": ["transformers"],
+      "transformers_quantization": "bitsandbytes-8bit"
+    },
+    {
+      "id": "dpo-v9.3-ocw-tf-4bit",
+      "label": "DPO v9.3 OCW Transformers 4-bit",
+      "model_name": "dpo_v9.3_ocw",
+      "base_url": "http://127.0.0.1:8000/v1",
+      "server_conda_env": "",
+      "server_model": "unsloth/Meta-Llama-3.1-8B-Instruct",
+      "lora_path": "models/adapters/dpo_v9.3_ocw",
+      "gpu_memory_utilization": 0.8,
+      "max_model_len": 16384,
+      "tensor_parallel_size": 1,
+      "dtype": "bfloat16",
+      "supported_backends": ["transformers"],
+      "transformers_quantization": "bitsandbytes-4bit"
     },
     {
       "id": "dpo-v9.3-ocw-fp8",
@@ -69,7 +161,8 @@
       "max_model_len": 32768,
       "tensor_parallel_size": 1,
       "dtype": "bfloat16",
-      "quantization": "fp8"
+      "quantization": "fp8",
+      "supported_backends": ["vllm"]
     },
     {
       "id": "llama-3.1-8b-instruct",
@@ -81,7 +174,36 @@
       "gpu_memory_utilization": 0.8,
       "max_model_len": 16384,
       "tensor_parallel_size": 1,
-      "dtype": "bfloat16"
+      "dtype": "bfloat16",
+      "supported_backends": ["vllm"]
+    },
+    {
+      "id": "llama-3.1-8b-instruct-tf-8bit",
+      "label": "LLaMA 3.1 8B Instruct Transformers 8-bit",
+      "model_name": "llama-3.1-8b-instruct",
+      "base_url": "http://127.0.0.1:8000/v1",
+      "server_conda_env": "",
+      "server_model": "unsloth/Meta-Llama-3.1-8B-Instruct",
+      "gpu_memory_utilization": 0.8,
+      "max_model_len": 16384,
+      "tensor_parallel_size": 1,
+      "dtype": "bfloat16",
+      "supported_backends": ["transformers"],
+      "transformers_quantization": "bitsandbytes-8bit"
+    },
+    {
+      "id": "llama-3.1-8b-instruct-tf-4bit",
+      "label": "LLaMA 3.1 8B Instruct Transformers 4-bit",
+      "model_name": "llama-3.1-8b-instruct",
+      "base_url": "http://127.0.0.1:8000/v1",
+      "server_conda_env": "",
+      "server_model": "unsloth/Meta-Llama-3.1-8B-Instruct",
+      "gpu_memory_utilization": 0.8,
+      "max_model_len": 16384,
+      "tensor_parallel_size": 1,
+      "dtype": "bfloat16",
+      "supported_backends": ["transformers"],
+      "transformers_quantization": "bitsandbytes-4bit"
     }
   ]
 }

@@ -100,6 +100,24 @@ class _RetryingOpenAIClient:
 
 
 class SummaryServiceTest(unittest.TestCase):
+    def test_extract_keywords_with_transformers_backend(self) -> None:
+        service = SummaryService(AppConfig(inference_backend="transformers"))
+
+        class _FakeBackend:
+            def __init__(self, config, *, role: str) -> None:
+                self.config = config
+                self.role = role
+
+            def generate(self, **kwargs) -> str:
+                self.kwargs = kwargs
+                return '{"keywords": ["tree", "graph"]}'
+
+        with patch("services.summary_service.TransformersTextGenerationBackend", _FakeBackend):
+            with patch.object(service, "_load_tokenizer", return_value=None):
+                result = service.extract_keywords("Binary search tree lecture content", 3)
+
+        self.assertEqual(result.keywords, ["tree", "graph"])
+
     def test_extract_keywords_fails_on_non_json_response(self) -> None:
         fake_module = types.SimpleNamespace(OpenAI=_FakeOpenAIClient)
         with patch.dict(sys.modules, {"openai": fake_module}):

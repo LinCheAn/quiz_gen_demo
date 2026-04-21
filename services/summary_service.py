@@ -5,6 +5,7 @@ import math
 import re
 from typing import Callable
 
+from services.transformers_backend import TransformersTextGenerationBackend
 from utils.config import AppConfig
 from utils.errors import ModelResponseFormatError
 from utils.schemas import KeywordResult
@@ -258,46 +259,19 @@ Return up to {n_keywords} keywords.
         n_keywords: int,
         progress_callback: ProgressCallback | None = None,
     ) -> list[str]:
-        try:
-            from openai import OpenAI
-        except ImportError as exc:
-            raise RuntimeError("openai package is required for live summary mode") from exc
-
-        client = OpenAI(
-            api_key=self.config.summary_api_key,
-            base_url=self.config.summary_base_url,
-        )
         prompt = self._build_prompt(text, n_keywords)
+        messages = [
+            {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ]
 
         if progress_callback:
-            progress_callback(0.4, f"Calling summary model: {self.config.summary_model_name}")
-
-        try:
-            response = client.chat.completions.create(
-                model=self.config.summary_model_name,
-                messages=[
-                    {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=self.config.summary_temperature,
-                extra_body={
-                    "chat_template_kwargs": {
-                        "enable_thinking": False,
-                    },
-                },
+            progress_callback(
+                0.4,
+                f"Calling summary model via {self.config.inference_backend}: {self.config.summary_model_name}",
             )
-        except Exception as exc:
-            context_limit_error = self._parse_context_length_error(exc)
-            if context_limit_error is not None:
-                raise context_limit_error from exc
-            raise RuntimeError(
-                "Failed to reach summary model endpoint "
-                f"{self.config.summary_base_url} for model {self.config.summary_model_name}. "
-                f"{endpoint_runtime_hint(self.config, 'summary')}"
-                f"{endpoint_client_hint(self.config.summary_base_url)} "
-                f"Original error: {exc}"
-            ) from exc
-        raw_content = response.choices[0].message.content or ""
+
+        raw_content = self._request_summary_generation(messages)
 
         if progress_callback:
             progress_callback(0.8, "Parsing summary response")
@@ -321,6 +295,54 @@ Return up to {n_keywords} keywords.
                 raw_response=raw_content,
                 model_name=self.config.summary_model_name,
             ) from exc
+
+    def _request_summary_generation(self, messages: list[dict[str, str]]) -> str:
+        if self.config.inference_backend == "transformers":
+            backend = TransformersTextGenerationBackend(self.config, role="summary")
+            try:
+                return backend.generate(
+                    messages=messages,
+                    temperature=self.config.summary_temperature,
+                    max_new_tokens=512,
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    "Failed to generate with transformers summary backend "
+                    f"for model {self.config.summary_model_name}. Original error: {exc}"
+                ) from exc
+
+        try:
+            from openai import OpenAI
+        except ImportError as exc:
+            raise RuntimeError("openai package is required for live summary mode") from exc
+
+        client = OpenAI(
+            api_key=self.config.summary_api_key,
+            base_url=self.config.summary_base_url,
+        )
+        try:
+            response = client.chat.completions.create(
+                model=self.config.summary_model_name,
+                messages=messages,
+                temperature=self.config.summary_temperature,
+                extra_body={
+                    "chat_template_kwargs": {
+                        "enable_thinking": False,
+                    },
+                },
+            )
+        except Exception as exc:
+            context_limit_error = self._parse_context_length_error(exc)
+            if context_limit_error is not None:
+                raise context_limit_error from exc
+            raise RuntimeError(
+                "Failed to reach summary model endpoint "
+                f"{self.config.summary_base_url} for model {self.config.summary_model_name}. "
+                f"{endpoint_runtime_hint(self.config, 'summary')}"
+                f"{endpoint_client_hint(self.config.summary_base_url)} "
+                f"Original error: {exc}"
+            ) from exc
+        return response.choices[0].message.content or ""
 
     @staticmethod
     def _parse_context_length_error(exc: Exception) -> "_SummaryContextLengthExceededError | None":

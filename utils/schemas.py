@@ -8,6 +8,8 @@ from pydantic import BaseModel, Field
 
 StepState = Literal["pending", "running", "completed", "failed", "skipped"]
 ServiceMode = Literal["live"]
+InferenceBackend = Literal["vllm", "transformers"]
+TransformersQuantization = Literal["bitsandbytes-8bit", "bitsandbytes-4bit"]
 
 
 def utc_now_iso() -> str:
@@ -29,6 +31,7 @@ class PipelineParameters(BaseModel):
     top_k: int = 5
     chunk_size: int = 512
     chunk_overlap: int = 64
+    inference_backend: InferenceBackend = "vllm"
     asr_preset_id: str | None = None
     summary_model_id: str | None = None
     quiz_model_id: str | None = None
@@ -49,6 +52,8 @@ class ModelPreset(BaseModel):
     tensor_parallel_size: int
     dtype: str | None = None
     quantization: str | None = None
+    supported_backends: list[InferenceBackend] = Field(default_factory=lambda: ["vllm"])
+    transformers_quantization: TransformersQuantization | None = None
 
 
 class ModelSelectionSnapshot(BaseModel):

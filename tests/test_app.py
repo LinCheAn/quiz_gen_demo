@@ -9,6 +9,7 @@ from app import (
     format_progress_html,
     format_run_info,
     format_status_rows,
+    refresh_model_dropdowns_for_backend,
     render_rag_outputs,
     render_regeneration_outputs,
     resolve_quiz_results,
@@ -168,6 +169,7 @@ class AppRenderingTest(unittest.TestCase):
 
         self.assertEqual(run_info["asr_preset_id"], state.parameters.asr_preset_id)
         self.assertEqual(run_info["asr_backend"], "transformers")
+        self.assertEqual(run_info["inference_backend"], "vllm")
         self.assertEqual(run_info["summary_model_id"], state.selected_models.summary.id)
         self.assertEqual(run_info["quiz_model_id"], state.selected_models.quiz.id)
         self.assertEqual(run_info["selected_models"]["quiz"]["lora_path"], state.selected_models.quiz.lora_path)
@@ -175,17 +177,33 @@ class AppRenderingTest(unittest.TestCase):
     def test_build_demo_includes_model_dropdowns_with_registry_defaults(self) -> None:
         config = self._build_demo_config()
 
+        inference_backend = self._find_component(config, "Inference Backend")
         asr_preset = self._find_component(config, "ASR Preset")
         summary_model = self._find_component(config, "Summary Model")
         quiz_model = self._find_component(config, "Quiz Model")
 
+        self.assertEqual(inference_backend["type"], "dropdown")
         self.assertEqual(asr_preset["type"], "dropdown")
         self.assertEqual(summary_model["type"], "dropdown")
         self.assertEqual(quiz_model["type"], "dropdown")
+        self.assertEqual(inference_backend["props"]["value"], "vllm")
         self.assertEqual(asr_preset["props"]["value"], "faster-whisper-breeze-asr-25")
         self.assertEqual(summary_model["props"]["value"], APP_MODEL_REGISTRY.defaults.summary_model_id)
         self.assertEqual(quiz_model["props"]["value"], APP_MODEL_REGISTRY.defaults.quiz_model_id)
         self.assertEqual(summary_model["props"]["choices"], quiz_model["props"]["choices"])
+        self.assertTrue(all("-tf-" not in item[1] for item in summary_model["props"]["choices"]))
+
+    def test_refresh_model_dropdowns_for_backend_resets_to_transformers_compatible_models(self) -> None:
+        summary_update, quiz_update = refresh_model_dropdowns_for_backend(
+            "transformers",
+            APP_MODEL_REGISTRY.defaults.summary_model_id,
+            APP_MODEL_REGISTRY.defaults.quiz_model_id,
+        )
+
+        self.assertIn("-tf-", summary_update.value)
+        self.assertIn("-tf-", quiz_update.value)
+        self.assertTrue(all("-tf-" in model_id for _, model_id in summary_update.choices))
+        self.assertTrue(all("-tf-" in model_id for _, model_id in quiz_update.choices))
 
     def test_pipeline_status_tabs_are_present_in_order(self) -> None:
         config = self._build_demo_config()
